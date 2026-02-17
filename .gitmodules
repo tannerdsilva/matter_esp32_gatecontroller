@@ -1,0 +1,4 @@
+[submodule "ide/esp-matter"]
+	path = ide/esp-matter
+	url = https://github.com/espressif/esp-matter.git
+	branch = release/v1.4.2
