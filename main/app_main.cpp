@@ -11,6 +11,7 @@
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
+#include <esp_matter_attribute_utils.h>
 #include <esp_matter_console.h>
 #include <esp_matter_providers.h>
 
@@ -64,7 +65,6 @@ static bool do_subscribe = true;
 static void init_event_cb(void *ptr, uint16_t endpoint_id) {
 	ESP_LOGI(TAG, "init_event_cb called for endpoint_id=%d", endpoint_id);
 }
-
 
 static esp_err_t override_stop_cmd_handler(const ConcreteCommandPath &command_path, TLVReader &tlv_data, void *opaque_ptr) {
 	ESP_LOGE(TAG, "override_stop_cmd_handler");
@@ -165,6 +165,59 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
     return ESP_OK;
 }
 
+
+static attribute_t *cover_currentPositionLiftPercent100ths;
+static attribute_t *cover_targetPositionLiftPercent100ths;
+static attribute_t *cover_operationalStatus;
+static attribute_t *cover_configStatus;
+static attribute_t *cover_mode;
+static attribute_t *cover_featureMap;
+
+static chip::EndpointId coverEPID = chip::kInvalidEndpointId;
+void cover_set_endpoint_id(chip::EndpointId epId) { coverEPID = epId; }
+void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool movingClosed) {
+	if (coverEPID == chip::kInvalidEndpointId) {
+		ESP_LOGE(TAG, "cover_update_state called before cover_set_endpoint_id");
+		return;
+	}
+	uint16_t targetPos = 0;
+	if (isOpen) {
+		targetPos = 1000;
+	} else if (isClosed) {
+		targetPos = 0;
+	}
+
+	// set CurrentPositionLiftPercent100ths attribute based on the state of the cover
+	esp_matter_attr_val_t targetPosVal = {
+		.type = ESP_MATTER_VAL_TYPE_UINT16,
+		.val = {
+			.u16 = targetPos,
+		}
+	};
+	esp_err_t err = attribute::update(coverEPID,
+        chip::app::Clusters::WindowCovering::Id,
+        chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
+        &targetPosVal
+	);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "Failed to update CurrentPositionLiftPercent100ths attribute, err:%d", err);
+	} else {
+		ESP_LOGD(TAG, "Updated CurrentPositionLiftPercent100ths attribute to %d", targetPos);
+	}
+	/*
+	uint16_t curPos = 0;
+	if (isOpen) {
+		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 1000);
+	} else if (isClosed) {
+		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 0);
+	} else if (movingOpen) {
+		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 500); // for demo purposes, we set it to 50% when it's moving
+	} else if (movingClosed) {
+		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 500); // for demo purposes, we set it to 50% when it's moving
+	}
+	*/
+}
+
 extern "C" void app_main() {
 	esp_err_t err = ESP_OK;
 	err = nvs_flash_init();
@@ -205,19 +258,38 @@ extern "C" void app_main() {
 	window_covering_device_config.window_covering.mode = 0x00;
 
 	endpoint_t *endpoint = window_covering_device::create(node, &window_covering_device_config, ENDPOINT_FLAG_NONE, NULL);
-	// ep_main = endpoint;
-	
+	cover_set_endpoint_id(endpoint::get_id(endpoint));
 	cluster_t *windowCoveringCluser = cluster::window_covering::create(endpoint, &window_covering_device_config.window_covering, MATTER_CLUSTER_FLAG_INIT_FUNCTION | MATTER_CLUSTER_FLAG_SERVER);
 	
+	// create the up/open command
 	command_t *upOrOpenCommand = cluster::window_covering::command::create_up_or_open(windowCoveringCluser);
 	command::set_user_callback(upOrOpenCommand, override_cmd_handler);
 
+	// create the down/close command
 	command_t *downOrCloseCommand = cluster::window_covering::command::create_down_or_close(windowCoveringCluser);
 	command::set_user_callback(downOrCloseCommand, override_cmd_handler);
 
+	// create the stop command
 	command_t *stopCommand = cluster::window_covering::command::create_stop_motion(windowCoveringCluser);
 	command::set_user_callback(stopCommand, override_cmd_handler);
 
+	// create the mandatory attributes for the window covering cluster.
+	cover_currentPositionLiftPercent100ths = cluster::window_covering::attribute::create_target_position_lift_percent_100ths(windowCoveringCluser, 0);
+	cover_targetPositionLiftPercent100ths = cluster::window_covering::attribute::create_target_position_lift_percent_100ths(windowCoveringCluser, 0);
+	cover_operationalStatus = cluster::window_covering::attribute::create_operational_status(windowCoveringCluser, 0);
+	cover_configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, 0);
+	cover_mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0);
+	// attribute::set_value(mode, 0x00);
+	
+	esp_matter_attr_val_t cur_val = {
+		.type = ESP_MATTER_VAL_TYPE_UINT16,
+		.val = {
+			.u16 = 0,
+		}
+	};
+	
+	// attribute_t *featureMap = global::attribute::create_feature_map(windowCoveringCluser, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
+	/*
 	attribute_t *openPositionLimit = cluster::window_covering::attribute::create_installed_open_limit_lift(windowCoveringCluser, 1024);
 	attribute_t *closePositionLimit = cluster::window_covering::attribute::create_installed_closed_limit_lift(windowCoveringCluser, 0);
 	attribute_t *currentPositionLiftPercent = cluster::window_covering::attribute::create_target_position_lift_percent_100ths(windowCoveringCluser, 5000);
@@ -226,7 +298,7 @@ extern "C" void app_main() {
 	attribute_t *configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, ((uint8_t)chip::app::Clusters::WindowCovering::ConfigStatus::kOperational) | ((uint8_t)chip::app::Clusters::WindowCovering::ConfigStatus::kOnlineReserved));
 	attribute_t *mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0x00);
 	// attribute_t *featureMap = global::attribute::create_feature_map(windowCoveringCluser, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
-
+	*/
 
 	ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
