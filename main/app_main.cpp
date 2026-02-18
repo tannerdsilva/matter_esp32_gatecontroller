@@ -194,7 +194,8 @@ void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool moving
 			.u16 = targetPos,
 		}
 	};
-	esp_err_t err = attribute::update(coverEPID,
+	esp_err_t err = attribute::update(
+		coverEPID,
         chip::app::Clusters::WindowCovering::Id,
         chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
         &targetPosVal
@@ -204,6 +205,45 @@ void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool moving
 	} else {
 		ESP_LOGD(TAG, "Updated CurrentPositionLiftPercent100ths attribute to %d", targetPos);
 	}
+
+	// set TargetPositionLiftPercent100ths attribute to 0 when the cover is closed, and 1000 when the cover is open. This is to make sure that the target position is in sync with the current position when the cover is fully open or fully closed. When the cover is moving, we don't update the target position so that it can be controlled by the user or other controllers.
+	uint16_t targetPosVal = 0xFFFF;
+	if (movingOpen) {
+		targetPosVal = 10000;
+	} else if (movingClosed) {
+		targetPosVal = 0;
+	} else if (isOpen) {
+		targetPosVal = 10000;
+	} else if (isClosed) {
+		targetPosVal = 0;
+	}
+	if (targetPosVal != 0xFFFF) {
+		esp_matter_attr_val_t targetPosVal = {
+			.type = ESP_MATTER_VAL_TYPE_UINT16,
+			.val = {
+				.u16 = targetPosVal,
+			}
+		};
+		err = attribute::update(coverEPID,
+			chip::app::Clusters::WindowCovering::Id,
+			chip::app::Clusters::WindowCovering::Attributes::TargetPositionLiftPercent100ths::Id,
+			&targetPosVal
+		);
+		if (err != ESP_OK) {
+			ESP_LOGE(TAG, "Failed to update TargetPositionLiftPercent100ths attribute, err:%d", err);
+		} else {
+			ESP_LOGD(TAG, "Updated TargetPositionLiftPercent100ths attribute to %d", targetPosVal);
+		}
+	}
+
+	// set OperationalStatus attribute based on the state of the cover
+	uint8_t opStatus = 0;
+	if (movingOpen) {
+		opStatus |= static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalStatus::kLiftOpening);
+	} else if (movingClosed) {
+		opStatus |= static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalStatus::kLiftClosing);
+	}
+
 	/*
 	uint16_t curPos = 0;
 	if (isOpen) {
