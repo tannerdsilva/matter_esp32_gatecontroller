@@ -12,6 +12,7 @@
 
 #include <esp_matter.h>
 #include <app/clusters/window-covering-server/window-covering-server.h>
+#include <app/clusters/boolean-state-configuration-server/boolean-state-configuration-server.h>
 #include <esp_matter_console.h>
 #include <esp_matter_providers.h>
 
@@ -85,38 +86,38 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
-		ESP_LOGI(TAG, "interface IP Address Changed");
+		ESP_LOGI("STATECHANGE", "interface IP Address Changed");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
-		ESP_LOGI(TAG, "commissioning complete");
+		ESP_LOGI("STATECHANGE", "commissioning complete");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
-		ESP_LOGI(TAG, "commissioning failed, fail safe timer expired");
+		ESP_LOGI("STATECHANGE", "commissioning failed, fail safe timer expired");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
-		ESP_LOGI(TAG, "commissioning session started");
+		ESP_LOGI("STATECHANGE", "commissioning session started");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
-		ESP_LOGI(TAG, "commissioning session stopped");
+		ESP_LOGI("STATECHANGE", "commissioning session stopped");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
-		ESP_LOGI(TAG, "commissioning window opened");
+		ESP_LOGI("STATECHANGE", "commissioning window opened");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
-		ESP_LOGI(TAG, "commissioning window closed");
+		ESP_LOGI("STATECHANGE", "commissioning window closed");
 		break;
 	case chip::DeviceLayer::DeviceEventType::kServerReady:
-		ESP_LOGI(TAG, "server ready");
+		ESP_LOGI("STATECHANGE", "server ready");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
-		ESP_LOGI(TAG, "binding entry changed");
+		ESP_LOGI("STATECHANGE", "binding entry changed");
 #if CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
 		if (do_subscribe) {
 			for (const auto & binding : chip::BindingTable::GetInstance())
@@ -150,7 +151,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     break;
 
     default:
-		 ESP_LOGI(TAG, "unhandled event type: %d", event->Type);
+		 ESP_LOGI("STATECHANGE", "unhandled event type: %d", event->Type);
         break;
     }
 }
@@ -295,6 +296,8 @@ extern "C" void app_main() {
 
 	node::config_t node_config;
 	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
+	endpoint_t *rootEndpoint = endpoint::get_first(node); // initialize the id of the root endpoint before using it in the attribute update callback
+
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
 
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
@@ -320,6 +323,9 @@ extern "C" void app_main() {
 
 	endpoint_t *endpoint = window_covering_device::create(node, &window_covering_device_config, ENDPOINT_FLAG_NONE, NULL);
 	cover_set_endpoint_id(endpoint::get_id(endpoint));
+	cluster::binding::config_t common_config = {};
+	cluster_t *bindingCluster = cluster::binding::create(rootEndpoint, &common_config, CLUSTER_FLAG_SERVER);
+
 	cluster_t *windowCoveringCluser = cluster::window_covering::create(endpoint, &window_covering_device_config.window_covering, MATTER_CLUSTER_FLAG_INIT_FUNCTION | MATTER_CLUSTER_FLAG_SERVER);
 	
 	// create the up/open command
