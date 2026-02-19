@@ -11,7 +11,7 @@
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
-#include <esp_matter_attribute_utils.h>
+#include <app/clusters/window-covering-server/window-covering-server.h>
 #include <esp_matter_console.h>
 #include <esp_matter_providers.h>
 
@@ -188,22 +188,30 @@ void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool moving
 	}
 
 	// set CurrentPositionLiftPercent100ths attribute based on the state of the cover
-	esp_matter_attr_val_t targetPosVal = {
+	esp_matter_attr_val_t currentPosAttrVal = {
 		.type = ESP_MATTER_VAL_TYPE_UINT16,
-		.val = {
-			.u16 = targetPos,
-		}
 	};
+	if (isOpen) {
+		currentPosAttrVal.val.u16 = 1000;
+	} else if (isClosed) {
+		currentPosAttrVal.val.u16 = 0;
+	} else if (movingOpen) {
+		currentPosAttrVal.val.u16 = 500; // for demo purposes, we set it to 50% when it's moving
+	} else if (movingClosed) {
+		currentPosAttrVal.val.u16 = 500; // for demo purposes, we set it to 50% when it's moving
+	} else {
+		currentPosAttrVal.val.u16 = targetPos; // if the cover is in an unknown state, we set the current position to the target position to avoid confusion.
+	}
 	esp_err_t err = attribute::update(
 		coverEPID,
         chip::app::Clusters::WindowCovering::Id,
         chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
-        &targetPosVal
+        &currentPosAttrVal
 	);
 	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Failed to update CurrentPositionLiftPercent100ths attribute, err:%d", err);
+		ESP_LOGE(TAG, "Failed to update CurrentPositionLiftPercent100ths attribute");
 	} else {
-		ESP_LOGD(TAG, "Updated CurrentPositionLiftPercent100ths attribute to %d", targetPos);
+		ESP_LOGD(TAG, "Updated CurrentPositionLiftPercent100ths attribute");
 	}
 
 	// set TargetPositionLiftPercent100ths attribute to 0 when the cover is closed, and 1000 when the cover is open. This is to make sure that the target position is in sync with the current position when the cover is fully open or fully closed. When the cover is moving, we don't update the target position so that it can be controlled by the user or other controllers.
@@ -218,7 +226,7 @@ void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool moving
 		targetPosVal = 0;
 	}
 	if (targetPosVal != 0xFFFF) {
-		esp_matter_attr_val_t targetPosVal = {
+		esp_matter_attr_val_t targetPosAttrVal = {
 			.type = ESP_MATTER_VAL_TYPE_UINT16,
 			.val = {
 				.u16 = targetPosVal,
@@ -227,35 +235,41 @@ void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool moving
 		err = attribute::update(coverEPID,
 			chip::app::Clusters::WindowCovering::Id,
 			chip::app::Clusters::WindowCovering::Attributes::TargetPositionLiftPercent100ths::Id,
-			&targetPosVal
+			&targetPosAttrVal
 		);
 		if (err != ESP_OK) {
-			ESP_LOGE(TAG, "Failed to update TargetPositionLiftPercent100ths attribute, err:%d", err);
+			ESP_LOGE(TAG, "Failed to update TargetPositionLiftPercent100ths attribute");
 		} else {
-			ESP_LOGD(TAG, "Updated TargetPositionLiftPercent100ths attribute to %d", targetPosVal);
+			ESP_LOGD(TAG, "Updated TargetPositionLiftPercent100ths attribute");
 		}
 	}
 
 	// set OperationalStatus attribute based on the state of the cover
+	using namespace chip::app::Clusters::WindowCovering;
 	uint8_t opStatus = 0;
 	if (movingOpen) {
-		opStatus |= static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalStatus::kLiftOpening);
+		opStatus = static_cast<uint8_t>(OperationalState::MovingUpOrOpen);
 	} else if (movingClosed) {
-		opStatus |= static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalStatus::kLiftClosing);
+		opStatus = static_cast<uint8_t>(OperationalState::MovingDownOrClose);
+	} else {
+		opStatus = static_cast<uint8_t>(OperationalState::Stall);
 	}
-
-	/*
-	uint16_t curPos = 0;
-	if (isOpen) {
-		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 1000);
-	} else if (isClosed) {
-		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 0);
-	} else if (movingOpen) {
-		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 500); // for demo purposes, we set it to 50% when it's moving
-	} else if (movingClosed) {
-		chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Set(coverEPID, 500); // for demo purposes, we set it to 50% when it's moving
+	esp_matter_attr_val_t opStatusAttrVal = {
+		.type = ESP_MATTER_VAL_TYPE_BITMAP8,
+		.val = {
+			.u8 = opStatus,
+		}
+	};
+	err = attribute::update(coverEPID,
+		chip::app::Clusters::WindowCovering::Id,
+		chip::app::Clusters::WindowCovering::Attributes::OperationalStatus::Id,
+		&opStatusAttrVal
+	);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "Failed to update OperationalStatus attribute");
+	} else {
+		ESP_LOGD(TAG, "Updated OperationalStatus attribute");
 	}
-	*/
 }
 
 extern "C" void app_main() {
@@ -320,13 +334,6 @@ extern "C" void app_main() {
 	cover_configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, 0);
 	cover_mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0);
 	// attribute::set_value(mode, 0x00);
-	
-	esp_matter_attr_val_t cur_val = {
-		.type = ESP_MATTER_VAL_TYPE_UINT16,
-		.val = {
-			.u16 = 0,
-		}
-	};
 	
 	// attribute_t *featureMap = global::attribute::create_feature_map(windowCoveringCluser, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
 	/*
