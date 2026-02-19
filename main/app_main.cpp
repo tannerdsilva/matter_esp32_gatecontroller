@@ -21,8 +21,14 @@
 #include "wcman.h"
 #include "driver/gpio.h"
 
-#define LED_GPIO   GPIO_NUM_0
+#define LED_GPIO   GPIO_NUM_8
 #define BLINK_MS   200
+
+// pin layouts picked based on the esp32-h2 dev board.
+#define GPIO_OUTPUT_COVER_OPEN			GPIO_NUM_2
+#define GPIO_OUTPUT_COVER_CLOSE			GPIO_NUM_3
+#define GPIO OUTPUT_COVER_STOP			GPIO_NUM_4
+#define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
 #if CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
 #include <app/util/binding-table.h>
@@ -143,7 +149,6 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     }
     break;
 
-
     default:
 		 ESP_LOGI(TAG, "unhandled event type: %d", event->Type);
         break;
@@ -164,7 +169,6 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
     }
 
 	ESP_LOGI(TAG, "attribute updated: endpoint_id=%d", endpoint_id);
-
     return ESP_OK;
 }
 
