@@ -77,7 +77,6 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 }
 
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
-	ESP_LOGI(TAG, "app_event_cb event type: %d", event->Type);
     switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
 		ESP_LOGI(TAG, "interface IP Address Changed");
@@ -105,6 +104,9 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
 		ESP_LOGI(TAG, "commissioning window closed");
+		break;
+	case chip::DeviceLayer::DeviceEventType::kServerReady:
+		ESP_LOGI(TAG, "server ready");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
@@ -143,6 +145,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 
     default:
+		 ESP_LOGI(TAG, "unhandled event type: %d", event->Type);
         break;
     }
 }
