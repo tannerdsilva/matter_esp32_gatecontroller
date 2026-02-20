@@ -11,6 +11,7 @@
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
+#include <esp_matter_attribute_utils.h>
 #include <app/clusters/window-covering-server/window-covering-server.h>
 #include <app/clusters/boolean-state-configuration-server/boolean-state-configuration-server.h>
 #include <esp_matter_console.h>
@@ -294,11 +295,34 @@ extern "C" void app_main() {
 	app_driver_handle_t switch_handle = app_driver_switch_init();
 	app_reset_button_register(switch_handle);
 
-	node::config_t node_config;
-	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
-	endpoint_t *rootEndpoint = endpoint::get_first(node); // initialize the id of the root endpoint before using it in the attribute update callback
+	// configure the root node
+	node::config_t node_cfg;
+    node_t *node = node::create(&node_cfg, app_attribute_update_cb, app_identification_cb);
+    ESP_ERROR_CHECK(node ? ESP_OK : ESP_FAIL);
+	ESP_LOGI(TAG, "root node created");
 
+	// create the shade endpoint
+    endpoint_t *shade_ep = endpoint::create(node, ENDPOINT_FLAG_NONE, NULL);
+    ESP_ERROR_CHECK(shade_ep ? ESP_OK : ESP_FAIL);
+    uint16_t shade_ep_id = endpoint::get_id(shade_ep);
+    ESP_LOGI(TAG, "shade endpoint created, id=%u", shade_ep_id);
+
+	cluster::window_covering::config_t wc_cfg;
+    wc_cfg.feature_flags = static_cast<uint32_t>(chip::app::Clusters::WindowCovering::Feature::kLift);
+    wc_cfg.type = static_cast<uint8_t>(chip::app::Clusters::WindowCovering::EndProductType::kUnknown);
+    wc_cfg.config_status = static_cast<uint8_t>(chip::app::Clusters::WindowCovering::ConfigStatus::kOperational);
+    wc_cfg.operational_status = static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalState::Stall);
+    wc_cfg.mode = 0;      // default – no special mode
+
+	cluster_t *windowCoveringCluser = cluster::window_covering::create(shade_ep, &wc_cfg, MATTER_CLUSTER_FLAG_INIT_FUNCTION | MATTER_CLUSTER_FLAG_SERVER);
+    ESP_ERROR_CHECK(windowCoveringCluser ? ESP_OK : ESP_FAIL);
+
+	// create the feature map attribute for the window covering cluster
+	attribute_t *featureMapAttribute = cluster::global::attribute::create_feature_map(windowCoveringCluser, static_cast<uint32_t>(chip::app::Clusters::WindowCovering::Feature::kLift));
+	// attribute_t *feature_map = global::attribute::create_feature_map(windowCoveringCluster, static_cast<uint32_t>(chip::app::Clusters::WindowCovering::Feature::kLift));
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
+
+	// set up the attributes
 
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
 	endpoint_t *root_node_ep = endpoint::get_first(node);
@@ -314,20 +338,6 @@ extern "C" void app_main() {
 	cluster::time_synchronization::feature::time_zone::add(time_sync_cluster, &tz_cfg);
 	#endif
 
-	window_covering_device::config_t window_covering_device_config(static_cast<uint8_t>(chip::app::Clusters::WindowCovering::EndProductType::kUnknown));
-	window_covering_device_config.window_covering.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift;
-	window_covering_device_config.window_covering.type = (uint8_t)chip::app::Clusters::WindowCovering::Type::kUnknown;
-	window_covering_device_config.window_covering.config_status = 0x01;
-	window_covering_device_config.window_covering.operational_status = 0x00;
-	window_covering_device_config.window_covering.mode = 0x00;
-
-	endpoint_t *endpoint = window_covering_device::create(node, &window_covering_device_config, ENDPOINT_FLAG_NONE, NULL);
-	cover_set_endpoint_id(endpoint::get_id(endpoint));
-	cluster::binding::config_t common_config = {};
-	cluster_t *bindingCluster = cluster::binding::create(rootEndpoint, &common_config, CLUSTER_FLAG_SERVER);
-
-	cluster_t *windowCoveringCluser = cluster::window_covering::create(endpoint, &window_covering_device_config.window_covering, MATTER_CLUSTER_FLAG_INIT_FUNCTION | MATTER_CLUSTER_FLAG_SERVER);
-	
 	// create the up/open command
 	command_t *upOrOpenCommand = cluster::window_covering::command::create_up_or_open(windowCoveringCluser);
 	command::set_user_callback(upOrOpenCommand, override_cmd_handler);
@@ -360,7 +370,11 @@ extern "C" void app_main() {
 	// attribute_t *featureMap = global::attribute::create_feature_map(windowCoveringCluser, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
 	*/
 
-	ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));
+	endpoint_t *root_ep = endpoint::get_first(node);   // endpoint 0
+    cluster::binding::config_t bind_cfg;
+    cluster::binding::create(root_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
+
+	// ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
