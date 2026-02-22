@@ -23,7 +23,7 @@
 #include <app/server/Server.h>
 #include <lib/core/Optional.h>
 
-#ifdef CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
+#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
 #include <app/AttributePathParams.h>
 #include <app/ConcreteAttributePath.h>
 #include <lib/core/TLVReader.h>
@@ -39,16 +39,16 @@ using namespace esp_matter::cluster;
 static const char *TAG = "app_driver";
 extern uint16_t switch_endpoint_id;
 
-#ifdef CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
+#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
 class MyReadClientCallback : public chip::app::ReadClient::Callback {
 public:
     void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath,
                          chip::TLV::TLVReader *aReader,
                          const chip::app::StatusIB &aStatus) override {
         // Handle the attribute data
-        if (aPath.mClusterId == chip::app::Clusters::OnOff::Id) {
-            if (aPath.mAttributeId == chip::app::Clusters::OnOff::Attributes::OnOff::Id) {
-                ESP_LOGI(TAG, "Received OnOff attribute");
+        if (aPath.mClusterId == chip::app::Clusters::BooleanState::Id) {
+            if (aPath.mAttributeId == chip::app::Clusters::BooleanState::Attributes::StateValue::Id) {
+                ESP_LOGI(TAG, "Received BooleanState attribute");
             }
         }
     }
@@ -266,7 +266,7 @@ void app_driver_client_callback(client::peer_device_t *peer_device, client::requ
 {
     if (req_handle->type == esp_matter::client::INVOKE_CMD) {
         app_driver_client_invoke_command_callback(peer_device, req_handle, priv_data);
-#ifdef CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
+#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
     } else if (req_handle->type == esp_matter::client::SUBSCRIBE_ATTR) {
         app_client_subscribe_command_callback(peer_device, req_handle, priv_data);
 #endif

@@ -20,9 +20,13 @@
 #include <app_reset.h>
 #include "wcman.h"
 #include "driver/gpio.h"
+#include "led_strip.h"
+#include "led_strip_types.h"
 
 #define LED_GPIO   GPIO_NUM_8
 #define BLINK_MS   200
+#define LED_COUNT   1
+static led_strip_t *led_status;
 
 // pin layouts picked based on the esp32-h2 dev board.
 #define GPIO_OUTPUT_COVER_OPEN			GPIO_NUM_2
@@ -30,7 +34,7 @@
 #define GPIO OUTPUT_COVER_STOP			GPIO_NUM_4
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
-#if CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
+#if CONFIG_SUBSCRIBE_AFTER_BINDING
 #include <app/util/binding-table.h>
 #include <esp_matter_client.h>
 #include <app/AttributePathParams.h>
@@ -64,8 +68,10 @@ using namespace esp_matter::endpoint;
 dynamic_commissionable_data_provider g_dynamic_passcode_provider;
 #endif
 
-#if CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
+#if CONFIG_SUBSCRIBE_AFTER_BINDING
 static bool do_subscribe = true;
+static constexpr chip::ClusterId   kContactSensorClusterId = chip::app::Clusters::BooleanState::Id;               // 0x000F
+static constexpr chip::AttributeId kContactSensorAttrId   = chip::app::Clusters::BooleanState::Attributes::StateValue::Id; // 0x0000
 #endif
 
 static void init_event_cb(void *ptr, uint16_t endpoint_id) {
@@ -117,7 +123,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGI(TAG, "binding entry changed");
-#if CONFIG_SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
+		#if CONFIG_SUBSCRIBE_AFTER_BINDING
 		if (do_subscribe) {
 			for (const auto & binding : chip::BindingTable::GetInstance())
 			{
@@ -134,7 +140,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 						"Matched accessingFabricIndex with nodeId=0x" ChipLogFormatX64,
 						ChipLogValueX64(binding.nodeId));
 
-					uint32_t attribute_id = chip::app::Clusters::OnOff::Attributes::OnOff::Id;
+					uint32_t attribute_id = static_cast<uint32_t>(chip::app::Clusters::BooleanState::Attributes::StateValue::Id);
 					client::request_handle_t req_handle;
 					req_handle.type = esp_matter::client::SUBSCRIBE_ATTR;
 					req_handle.attribute_path = {binding.remote, binding.clusterId.value(), attribute_id};
@@ -171,7 +177,6 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
 	ESP_LOGI(TAG, "attribute updated: endpoint_id=%d", endpoint_id);
     return ESP_OK;
 }
-
 
 static attribute_t *cover_currentPositionLiftPercent100ths;
 static attribute_t *cover_targetPositionLiftPercent100ths;
@@ -290,6 +295,25 @@ extern "C" void app_main() {
 	ESP_ERROR_CHECK(err);
 	ESP_LOGI(TAG, "NVS init OK – ready for Matter");
 
+	// set up the led indicator
+	led_strip_config_t strip_config = {
+		.strip_gpio_num = LED_GPIO,
+		.max_leds = 1,
+		.led_pixel_format = LED_PIXEL_FORMAT_GRB,
+		.led_model = LED_MODEL_WS2812
+	};
+	led_strip_rmt_config_t rmt_config = {
+		.clk_src = RMT_CLK_SRC_DEFAULT,
+		.resolution_hz = 10000000, // 10MHz resolution (0.1us per tick)
+		.mem_block_symbols = 64,
+		.flags = {
+			.with_dma = 0, // Enable DMA for better performance
+		}
+	};
+	led_strip_new_rmt_device(&strip_config, &rmt_config, &led_status);
+	led_strip_set_pixel(led_status, 0, 0, 0, 16); // Blue color to indicate the device is powered on
+	led_strip_refresh(led_status);
+
 	app_driver_handle_t switch_handle = app_driver_switch_init();
 	app_reset_button_register(switch_handle);
 
@@ -300,13 +324,11 @@ extern "C" void app_main() {
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
 	endpoint_t *root_node_ep = endpoint::get_first(node);
 	ABORT_APP_ON_FAILURE(root_node_ep != nullptr, ESP_LOGE(TAG, "Failed to find root node endpoint"));
-
 	cluster::time_synchronization::config_t time_sync_cfg;
 	static chip::app::Clusters::TimeSynchronization::DefaultTimeSyncDelegate time_sync_delegate;
 	time_sync_cfg.delegate = &time_sync_delegate;
 	cluster_t *time_sync_cluster = cluster::time_synchronization::create(root_node_ep, &time_sync_cfg, CLUSTER_FLAG_SERVER);
 	ABORT_APP_ON_FAILURE(time_sync_cluster != nullptr, ESP_LOGE(TAG, "Failed to create time_sync_cluster"));
-
 	cluster::time_synchronization::feature::time_zone::config_t tz_cfg;
 	cluster::time_synchronization::feature::time_zone::add(time_sync_cluster, &tz_cfg);
 	#endif
@@ -340,19 +362,10 @@ extern "C" void app_main() {
 	cover_operationalStatus = cluster::window_covering::attribute::create_operational_status(windowCoveringCluser, 0);
 	cover_configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, 0);
 	cover_mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0);
-	// attribute::set_value(mode, 0x00);
-	
-	// attribute_t *featureMap = global::attribute::create_feature_map(windowCoveringCluser, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
-	/*
-	attribute_t *openPositionLimit = cluster::window_covering::attribute::create_installed_open_limit_lift(windowCoveringCluser, 1024);
-	attribute_t *closePositionLimit = cluster::window_covering::attribute::create_installed_closed_limit_lift(windowCoveringCluser, 0);
-	attribute_t *currentPositionLiftPercent = cluster::window_covering::attribute::create_target_position_lift_percent_100ths(windowCoveringCluser, 5000);
 
-	attribute_t *opStatus = cluster::window_covering::attribute::create_operational_status(windowCoveringCluser, (uint8_t)chip::app::Clusters::WindowCovering::OperationalStatus::kLift);
-	attribute_t *configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, ((uint8_t)chip::app::Clusters::WindowCovering::ConfigStatus::kOperational) | ((uint8_t)chip::app::Clusters::WindowCovering::ConfigStatus::kOnlineReserved));
-	attribute_t *mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0x00);
-	// attribute_t *featureMap = global::attribute::create_feature_map(windowCoveringCluser, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
-	*/
+	endpoint_t *root_ep = endpoint::get_first(node);
+	cluster::binding::config_t bind_cfg;
+	cluster::binding::create(root_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 
 	ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
