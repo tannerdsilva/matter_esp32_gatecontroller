@@ -1,6 +1,6 @@
 menu "Example Configuration"
 
-    visible if CUSTOM_COMMISSIONABLE_DATA_PROVIDER
+    # visible if CUSTOM_COMMISSIONABLE_DATA_PROVIDER
 
     config DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
         bool "Enable Dynamic Passcode Commissionable Data Provider"
@@ -30,10 +30,9 @@ menu "Example Configuration"
         help
             Fixed salt in custom dynamic passcode commissionable data provider. It should be a Base64-Encoded string.
 
-    config SUBSCRIBE_TO_ON_OFF_SERVER_AFTER_BINDING
-        bool "Enable subscribe to on/off server after binding"
-        default n
+    config SUBSCRIBE_AFTER_BINDING
+        bool "Enable subscribe to server after binding"
+        default y
         help
-            "Enables auto subscription to on/off server from client on change in binding"
-
+            "When enabled the firmware will automatically create a Matter subscription after a binding entry is added. This option pulls in the extra client‑side code needed to receive attribute reports from a BooleanState (contact‑sensor) cluster."
 endmenu

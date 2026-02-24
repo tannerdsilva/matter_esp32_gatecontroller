@@ -1,4 +1,4 @@
-#include "wcman.h"
+#include "wcman.hpp"
 #include "app/util/attribute-storage.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
