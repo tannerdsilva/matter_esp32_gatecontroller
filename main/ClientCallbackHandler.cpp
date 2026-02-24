@@ -1,5 +1,3 @@
-#include "ClientCallbackHandler.hpp"
-
 #include <cstddef>
 #include <cstdio>
 #include <esp_log.h>
@@ -9,10 +7,10 @@
 #include <app_priv.h>
 #include <app_reset.h>
 
-#include <app/server/Server.h>
-#include <lib/core/Optional.h>
-
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+#include "ClientCallbackHandler.hpp"
+
+#include <app/util/binding-table.h>
 static const char *TAG = "MATTER_CLIENT";
 
 class MatterClientReadHandler : public chip::app::ReadClient::Callback {
@@ -45,4 +43,21 @@ public:
         ESP_LOGI(TAG, "ReadClient Done");
     }
 };
+
+static RemoteSubscription* find_or_create_subscription(const EmberBindingTableEntry &binding) {
+    for (auto &s : g_subscriptions) {
+        if (s.nodeId == binding.nodeId && s.fabricIndex == binding.fabricIndex &&
+            s.endpoint == binding.remote && s.clusterId == binding.clusterId.value()) {
+            return &s;
+        }
+    }
+	ESP_LOGI(TAG, "CREATING NEW SUBSCRIPTION FOR NODE 0x" ChipLogFormatX64 " ENDPOINT %d CLUSTER " ChipLogFormatMEI, ChipLogValueX64(binding.nodeId), binding.remote, ChipLogValueMEI(binding.clusterId.value()));
+	RemoteSubscription new_sub{};
+    new_sub.nodeId       = binding.nodeId;
+    new_sub.fabricIndex  = binding.fabricIndex;
+    new_sub.endpoint     = binding.remote;
+    new_sub.clusterId    = binding.clusterId.value();
+    g_subscriptions.push_back(new_sub);
+    return &g_subscriptions.back();
+}
 #endif

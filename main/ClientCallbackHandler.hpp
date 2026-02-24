@@ -21,6 +21,11 @@ struct RemoteSubscription {
     chip::app::ReadClient *client = nullptr;   // owned by SDK, we just keep the pointer
 };
 
+static std::vector<RemoteSubscription> g_subscriptions;
+static const uint16_t kMinIntervalSec = 5;
+static const uint16_t kMaxIntervalSec = 10;
+
+static RemoteSubscription* find_or_create_subscription(const EmberBindingTableEntry &binding);
 
 #endif
 // class MatterClientReadHandler : public chip::app::ReadClient::Callback {

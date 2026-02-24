@@ -12,8 +12,10 @@
 
 #include <esp_matter.h>
 #include <app/clusters/window-covering-server/window-covering-server.h>
+#include <app/clusters/boolean-state-configuration-server/boolean-state-configuration-server.h>
 #include <esp_matter_console.h>
 #include <esp_matter_providers.h>
+#include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
 
 #include <common_macros.h>
@@ -89,6 +91,8 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 	ESP_LOGE(TAG, "override_cmd_handler");
 	return ESP_ERR_INVALID_ARG;
 }
+
+static uint16_t event_stage = 0;
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
@@ -97,6 +101,9 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
 		ESP_LOGI(TAG, "commissioning complete");
+		event_stage = 2;
+		led_strip_set_pixel(led_status, 0, 0, 255, 0); // green
+		led_strip_refresh(led_status);
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
@@ -105,6 +112,9 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
 		ESP_LOGI(TAG, "commissioning session started");
+		event_stage = 1;
+		led_strip_set_pixel(led_status, 0, 0, 16, 16); // dim blue
+		led_strip_refresh(led_status);
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
@@ -113,10 +123,17 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
 		ESP_LOGI(TAG, "commissioning window opened");
+		event_stage = 0;
+		led_strip_set_pixel(led_status, 0, 0, 0, 128); // blue
+		led_strip_refresh(led_status);
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
 		ESP_LOGI(TAG, "commissioning window closed");
+		if (event_stage == 0) {
+			led_strip_set_pixel(led_status, 0, 16, 0, 0); // dim red
+			led_strip_refresh(led_status);
+		}
 		break;
 	case chip::DeviceLayer::DeviceEventType::kServerReady:
 		ESP_LOGI(TAG, "server ready");
@@ -124,9 +141,25 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-		ESP_LOGI(TAG, "BINDINGS CHANGED VIA CLUSTER: do_subscribe=%d", do_subscribe);
-		if (do_subscribe) {
+		/*chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        [](intptr_t) {*/
+            // ----------------------------------------------------------------
+            // 2️⃣  Grab the stack lock – now we are allowed to read the table.
+            // ----------------------------------------------------------------
+            // chip::DeviceLayer::PlatformMgr().LockChipStack();
+			ESP_LOGI(TAG, "BINDINGS CHANGED VIA CLUSTER: do_subscribe=%d", do_subscribe);
+			for (const auto &binding : chip::BindingTable::GetInstance()) {
+				ESP_LOGI(
+					TAG,
+					"ITERATING IN THE LOOP");
+			}
+			// chip::DeviceLayer::PlatformMgr().UnlockChipStack();
+		/*},
+		0);*/
+
+		/*if (do_subscribe) {
 			for (const auto & binding : chip::BindingTable::GetInstance()) {
+				
 				ESP_LOGI(
 					TAG,
 					"Read cached binding type=%d fabrixIndex=%d nodeId=0x" ChipLogFormatX64
@@ -151,7 +184,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 				}
 			}
 			do_subscribe = false;
-		}
+		}*/
 #endif
     }
     break;
@@ -305,7 +338,7 @@ extern "C" void app_main() {
 		}
 	};
 	led_strip_new_rmt_device(&strip_config, &rmt_config, &led_status);
-	led_strip_set_pixel(led_status, 0, 0, 0, 16); // Blue color to indicate the device is powered on
+	led_strip_set_pixel(led_status, 0, 0, 0, 0); // Blue color to indicate the device is powered on
 	led_strip_refresh(led_status);
 
 	app_driver_handle_t switch_handle = app_driver_switch_init();
@@ -357,9 +390,20 @@ extern "C" void app_main() {
 	cover_configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, 0);
 	cover_mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0);
 
+	// 
+	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
 	endpoint_t *root_ep = endpoint::get_first(node);
+	esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
+        root_ep,
+        chip::app::Clusters::BooleanState::Id,
+        NULL);
+
+	// add the required attribute for the boolean state cluster
+	attribute_t *state_attr = cluster::boolean_state::attribute::create_state_value(bool_srv, false);
+
 	cluster::binding::config_t bind_cfg;
 	cluster::binding::create(root_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
+	#endif
 
 	ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
@@ -380,12 +424,4 @@ extern "C" void app_main() {
 #endif
 	err = esp_matter::start(app_event_cb, NULL);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to start Matter, err:%d", err));
-	gpio_config_t io_conf = {
-		.pin_bit_mask = (1ULL << LED_GPIO),
-		.mode         = GPIO_MODE_OUTPUT,
-		.pull_up_en   = GPIO_PULLUP_DISABLE,
-		.pull_down_en = GPIO_PULLDOWN_DISABLE,
-		.intr_type    = GPIO_INTR_DISABLE,
-	};
-	gpio_config(&io_conf);
 }

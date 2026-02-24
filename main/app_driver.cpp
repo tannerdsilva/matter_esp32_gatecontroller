@@ -123,46 +123,18 @@ void app_driver_client_invoke_command_callback(client::peer_device_t *peer_devic
     return;
 }
 
-void app_driver_client_callback(client::peer_device_t *peer_device, client::request_handle_t *req_handle,
-                                               void *priv_data)
-{
-	ESP_LOGI(TAG, "CLIENT CALLBACK RECEIVED");
-    if (req_handle->type == esp_matter::client::INVOKE_CMD) {
-        app_driver_client_invoke_command_callback(peer_device, req_handle, priv_data);
+void app_driver_client_callback(client::peer_device_t *peer_device, client::request_handle_t *req_handle, void *priv_data) {
+	ESP_LOGE(TAG, "CLIENT CALLBACK RECEIVED");
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-    } else if (req_handle->type == esp_matter::client::SUBSCRIBE_ATTR) {
+    if (req_handle->type == esp_matter::client::SUBSCRIBE_ATTR) {
         app_client_subscribe_command_callback(peer_device, req_handle, priv_data);
+	}
 #endif
-    }
     return;
 }
-void app_driver_client_group_invoke_command_callback(uint8_t fabric_index, client::request_handle_t *req_handle,
-                                                     void *priv_data)
-{
-    if (req_handle->type != esp_matter::client::INVOKE_CMD) {
-        return;
-    }
-    char command_data_str[32];
-    // on_off light switch should support on_off cluster and identify cluster commands sending.
-    if (req_handle->command_path.mClusterId == OnOff::Id) {
-        strcpy(command_data_str, "{}");
-    } else if (req_handle->command_path.mClusterId == Identify::Id) {
-        if (req_handle->command_path.mCommandId == Identify::Commands::Identify::Id) {
-            if (((char *)req_handle->request_data)[0] != 1) {
-                ESP_LOGE(TAG, "Number of parameters error");
-                return;
-            }
-            snprintf(command_data_str, sizeof(command_data_str), "{\"0:U16\": %ld}",
-                    strtoul((const char *)(req_handle->request_data) + 1, NULL, 16));
-        } else {
-            ESP_LOGE(TAG, "Unsupported command");
-            return;
-        }
-    } else {
-        ESP_LOGE(TAG, "Unsupported cluster");
-        return;
-    }
-    client::interaction::invoke::send_group_request(fabric_index, req_handle->command_path, command_data_str);
+
+void app_driver_client_group_invoke_command_callback(uint8_t fabric_index, client::request_handle_t *req_handle, void *priv_data) {
+    ESP_LOGE(TAG, "GROUP INVOKE COMMAND CALLBACK RECEIVED: fabric_index=%d", fabric_index);
 }
 
 static void app_driver_button_toggle_cb(void *arg, void *data)
@@ -188,6 +160,8 @@ app_driver_handle_t app_driver_switch_init()
 	/* Other initializations */
     client::set_request_callback(app_driver_client_callback,
                                  app_driver_client_group_invoke_command_callback, NULL);
+
+	ESP_LOGI(TAG, "APP DRIVER INITIALIZED");
 
     return (app_driver_handle_t)btns[0];
 }
