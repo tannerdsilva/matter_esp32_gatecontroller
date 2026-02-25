@@ -41,6 +41,9 @@ static led_strip_t *led_status;
 #include <app/util/binding-table.h>
 #include <esp_matter_client.h>
 #include <app/AttributePathParams.h>
+#include <access/SubjectDescriptor.h>   // <-- provides chip::Access::Target
+#include <access/AccessControl.h>       // <-- AccessControl singleton
+
 #include <app/ConcreteAttributePath.h>
 #include <lib/core/TLVReader.h>
 #include <app/server/Server.h>
@@ -91,6 +94,91 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 	ESP_LOGE(TAG, "override_cmd_handler");
 	return ESP_ERR_INVALID_ARG;
 }
+
+#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+// helper function to check if an ACL entry already exists for the given parameters
+static bool __acl_entry_already_exists(chip::FabricIndex fabricIndex, chip::NodeId nodeId, chip::EndpointId endpointId, chip::ClusterId clusterId) {
+	chip::Access::AccessControl::EntryIterator it;
+    CHIP_ERROR err = chip::Access::GetAccessControl().Entries(fabricIndex, it);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to get ACL iterator: %s", chip::ErrorStr(err));
+        return false;
+    }
+    chip::Access::AccessControl::Entry entry;
+    while ((err = it.Next(entry)) == CHIP_NO_ERROR) {
+        size_t subjCnt = 0;
+        entry.GetSubjectCount(subjCnt);
+        for (size_t i = 0; i < subjCnt; ++i) {
+            chip::NodeId storedNode = chip::kUndefinedNodeId;
+            entry.GetSubject(i, storedNode);
+            if (storedNode != nodeId) continue;
+            size_t tgtCnt = 0;
+            entry.GetTargetCount(tgtCnt);
+            for (size_t t = 0; t < tgtCnt; ++t) {
+                chip::Access::AccessControl::Entry::Target tgt;
+                entry.GetTarget(t, tgt);
+                if ((tgt.flags & chip::Access::AccessControl::Entry::Target::kCluster) && (tgt.flags & chip::Access::AccessControl::Entry::Target::kEndpoint) && tgt.cluster == clusterId && tgt.endpoint == endpointId) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static CHIP_ERROR __create_view_acl_entry(chip::FabricIndex fabricIndex, chip::NodeId nodeId, chip::EndpointId endpointId, chip::ClusterId clusterId) {
+    chip::Access::AccessControl::Entry entry;
+    CHIP_ERROR err = chip::Access::GetAccessControl().PrepareEntry(entry);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "PrepareEntry failed: %s", chip::ErrorStr(err));
+        return err;
+    }
+    entry.SetAuthMode(chip::Access::AuthMode::kCase);
+    entry.SetFabricIndex(fabricIndex);
+    entry.SetPrivilege(chip::Access::Privilege::kView);
+    size_t subjIdx = 0;
+    err = entry.AddSubject(&subjIdx, nodeId);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "AddSubject failed: %s", chip::ErrorStr(err));
+        return err;
+    }
+    chip::Access::AccessControl::Entry::Target tgt;
+    tgt.flags = chip::Access::AccessControl::Entry::Target::kEndpoint | chip::Access::AccessControl::Entry::Target::kCluster;
+    tgt.endpoint = endpointId;
+    tgt.cluster  = clusterId;
+    size_t tgtIdx = 0;
+    err = entry.AddTarget(&tgtIdx, tgt);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "AddTarget failed: %s", chip::ErrorStr(err));
+        return err;
+    }
+    size_t newIdx = 0;
+    err = chip::Access::GetAccessControl().CreateEntry(nullptr, fabricIndex, &newIdx, entry);
+    if (err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "CreateEntry failed: %s", chip::ErrorStr(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "Created ACL entry idx=%zu for node 0x%" PRIx64 " (fabric=%u) → EP%u/Cluster0x%04x (View)", newIdx, nodeId, fabricIndex, endpointId, static_cast<uint16_t>(clusterId));
+    return CHIP_NO_ERROR;
+}
+
+static void ensure_acl_for_existing_bindings(void) {
+	chip::DeviceLayer::PlatformMgr().ScheduleWork(
+		[](intptr_t) {
+			chip::DeviceLayer::PlatformMgr().LockChipStack();
+			for (const auto &binding : chip::BindingTable::GetInstance()) {
+				if (binding.type != MATTER_UNICAST_BINDING) continue;
+				if (!binding.clusterId.has_value() || binding.clusterId.value() != chip::app::Clusters::BooleanState::Id) continue;
+
+				if (!__acl_entry_already_exists(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value())) {
+					__create_view_acl_entry(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value());
+				}
+			}
+			chip::DeviceLayer::PlatformMgr().UnlockChipStack();
+		},
+	0);
+}
+#endif
 
 static uint16_t event_stage = 0;
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
@@ -152,6 +240,16 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 				ESP_LOGI(
 					TAG,
 					"ITERATING IN THE LOOP");
+				if (!__acl_entry_already_exists(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value())) {
+					CHIP_ERROR err = __create_view_acl_entry(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value());
+					if (err != CHIP_NO_ERROR) {
+						ESP_LOGW(TAG, "Failed to add ACL for node 0x%" PRIx64 " – continue anyway", binding.nodeId);
+					}
+				} else {
+					ESP_LOGI(TAG,
+								"ACL entry already present for node 0x%" PRIx64,
+								binding.nodeId);
+				}
 			}
 			// chip::DeviceLayer::PlatformMgr().UnlockChipStack();
 		/*},
@@ -392,17 +490,29 @@ extern "C" void app_main() {
 
 	// 
 	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-	endpoint_t *root_ep = endpoint::get_first(node);
-	esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
+	esp_matter::endpoint::contact_sensor::config_t contact_sensor_config = {};
+	endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, &contact_sensor_config, CLUSTER_FLAG_SERVER, NULL);
+
+	/*esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
         root_ep,
         chip::app::Clusters::BooleanState::Id,
         NULL);
 
+	if (!bool_srv) {
+		ESP_LOGE(TAG, "Failed to create boolean state cluster");
+		return;
+	}
+
 	// add the required attribute for the boolean state cluster
 	attribute_t *state_attr = cluster::boolean_state::attribute::create_state_value(bool_srv, false);
 
+	if (!state_attr) {
+		ESP_LOGE(TAG, "Failed to create state value attribute");
+		return;
+	}
+	*/
 	cluster::binding::config_t bind_cfg;
-	cluster::binding::create(root_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
+	cluster::binding::create(contact_sensor_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 	#endif
 
 	ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));

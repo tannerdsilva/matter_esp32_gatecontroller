@@ -562,7 +562,7 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # Example Configuration
 #
-# CONFIG_SUBSCRIBE_AFTER_BINDING is not set
+CONFIG_SUBSCRIBE_AFTER_BINDING=y
 # end of Example Configuration
 
 #
