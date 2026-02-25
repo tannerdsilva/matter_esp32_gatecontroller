@@ -11,9 +11,9 @@
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
-#include <app/clusters/window-covering-server/window-covering-server.h>
-#include <app/clusters/boolean-state-configuration-server/boolean-state-configuration-server.h>
-#include <esp_matter_console.h>
+// #include <app/clusters/window-covering-server/window-covering-server.h>
+#include <app/clusters/bindings/binding-table.h>
+#include <app/clusters/boolean-state-server/boolean-state-cluster.h>
 #include <esp_matter_providers.h>
 #include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
@@ -21,15 +21,15 @@
 #include <common_macros.h>
 #include <app_priv.h>
 #include <app_reset.h>
-#include "wcman.hpp"
-#include "driver/gpio.h"
-#include "led_strip.h"
-#include "led_strip_types.h"
+
+// led indicator support
+#include "led_indicator.hpp"
+led_indicator_subsystem_t led_indicator_subsystem;
+
 
 #define LED_GPIO   GPIO_NUM_8
 #define BLINK_MS   200
 #define LED_COUNT   1
-static led_strip_t *led_status;
 
 // pin layouts picked based on the esp32-h2 dev board.
 #define GPIO_OUTPUT_COVER_OPEN			GPIO_NUM_2
@@ -38,8 +38,8 @@ static led_strip_t *led_status;
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-#include "ACLAssist.hpp"
-#include <app/util/binding-table.h>
+// #include "ACLAssist.hpp"
+#include <app/clusters/bindings/binding-table.h>
 #include <esp_matter_client.h>
 #include <app/AttributePathParams.h>
 #include <access/SubjectDescriptor.h>   // <-- provides chip::Access::Target
@@ -48,7 +48,7 @@ static led_strip_t *led_status;
 #include <app/ConcreteAttributePath.h>
 #include <lib/core/TLVReader.h>
 #include <app/server/Server.h>
-#include "ClientCallbackHandler.hpp"
+// #include "ClientCallbackHandler.hpp"
 #endif
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
@@ -66,20 +66,12 @@ static led_strip_t *led_status;
 static const char *TAG = "app_main";
 uint16_t switch_endpoint_id = 0;
 
-static chip::app::Clusters::WindowCovering::MyWindowCoveringManager *window_covering_manager = new chip::app::Clusters::WindowCovering::MyWindowCoveringManager();
-
 using namespace esp_matter;
 using namespace esp_matter::attribute;
 using namespace esp_matter::endpoint;
 
 #if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
 dynamic_commissionable_data_provider g_dynamic_passcode_provider;
-#endif
-
-#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-static bool do_subscribe = true;
-static constexpr chip::ClusterId   kContactSensorClusterId = chip::app::Clusters::BooleanState::Id;               // 0x000F
-static constexpr chip::AttributeId kContactSensorAttrId   = chip::app::Clusters::BooleanState::Attributes::StateValue::Id; // 0x0000
 #endif
 
 static void init_event_cb(void *ptr, uint16_t endpoint_id) {
@@ -96,11 +88,6 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 	return ESP_ERR_INVALID_ARG;
 }
 
-#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-
-
-#endif
-
 static uint16_t event_stage = 0;
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     switch (event->Type) {
@@ -111,8 +98,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 	case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
 		ESP_LOGI(TAG, "commissioning complete");
 		event_stage = 2;
-		led_strip_set_pixel(led_status, 0, 0, 255, 0); // green
-		led_strip_refresh(led_status);
+		led_indicator_set_color(&led_indicator_subsystem, 0, 255, 0); // green
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
@@ -122,8 +108,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
 		ESP_LOGI(TAG, "commissioning session started");
 		event_stage = 1;
-		led_strip_set_pixel(led_status, 0, 0, 16, 16); // dim blue
-		led_strip_refresh(led_status);
+		led_indicator_set_color(&led_indicator_subsystem, 0, 16, 16); // dim blue
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
@@ -133,15 +118,13 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
 		ESP_LOGI(TAG, "commissioning window opened");
 		event_stage = 0;
-		led_strip_set_pixel(led_status, 0, 0, 0, 128); // blue
-		led_strip_refresh(led_status);
+		led_indicator_set_color(&led_indicator_subsystem, 0, 0, 128); // blue
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
 		ESP_LOGI(TAG, "commissioning window closed");
 		if (event_stage == 0) {
-			led_strip_set_pixel(led_status, 0, 16, 0, 0); // dim red
-			led_strip_refresh(led_status);
+			led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
 		}
 		break;
 	case chip::DeviceLayer::DeviceEventType::kServerReady:
@@ -149,62 +132,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
-		#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-		/*chip::DeviceLayer::PlatformMgr().ScheduleWork(
-        [](intptr_t) {*/
-            // ----------------------------------------------------------------
-            // 2️⃣  Grab the stack lock – now we are allowed to read the table.
-            // ----------------------------------------------------------------
-            // chip::DeviceLayer::PlatformMgr().LockChipStack();
-			ESP_LOGI(TAG, "BINDINGS CHANGED VIA CLUSTER: do_subscribe=%d", do_subscribe);
-			for (const auto &binding : chip::BindingTable::GetInstance()) {
-				ESP_LOGI(
-					TAG,
-					"ITERATING IN THE LOOP");
-				/*if (!__acl_entry_already_exists(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value())) {
-					CHIP_ERROR err = __create_view_acl_entry(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value());
-					if (err != CHIP_NO_ERROR) {
-						ESP_LOGW(TAG, "Failed to add ACL for node 0x%" PRIx64 " – continue anyway", binding.nodeId);
-					}
-				} else {
-					ESP_LOGI(TAG,
-								"ACL entry already present for node 0x%" PRIx64,
-								binding.nodeId);
-				}*/
-			}
-			// chip::DeviceLayer::PlatformMgr().UnlockChipStack();
-		/*},
-		0);*/
-
-		/*if (do_subscribe) {
-			for (const auto & binding : chip::BindingTable::GetInstance()) {
-				
-				ESP_LOGI(
-					TAG,
-					"Read cached binding type=%d fabrixIndex=%d nodeId=0x" ChipLogFormatX64
-					" groupId=%d local endpoint=%d remote endpoint=%d cluster=" ChipLogFormatMEI,
-					binding.type, binding.fabricIndex, ChipLogValueX64(binding.nodeId), binding.groupId, binding.local,
-					binding.remote, ChipLogValueMEI(binding.clusterId.value_or(0)));
-				if (binding.type == MATTER_UNICAST_BINDING && event->BindingsChanged.fabricIndex == binding.fabricIndex)
-				{
-					ESP_LOGI(
-						TAG,
-						"Matched accessingFabricIndex with nodeId=0x" ChipLogFormatX64,
-						ChipLogValueX64(binding.nodeId));
-
-					uint32_t attribute_id = static_cast<uint32_t>(chip::app::Clusters::BooleanState::Attributes::StateValue::Id);
-					client::request_handle_t req_handle;
-					req_handle.type = esp_matter::client::SUBSCRIBE_ATTR;
-					req_handle.attribute_path = {binding.remote, binding.clusterId.value(), attribute_id};
-					auto &server = chip::Server::GetInstance();
-					client::connect(server.GetCASESessionManager(), binding.fabricIndex, binding.nodeId, &req_handle);
-					ESP_LOGI(TAG, "Sent subscribe request for BooleanState attribute");
-					break;
-				}
-			}
-			do_subscribe = false;
-		}*/
-#endif
+		ESP_LOGI(TAG, "Bindings changed via cluster");
+		break;
     }
     break;
 
@@ -224,112 +153,6 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
     return ESP_OK;
 }
 
-static attribute_t *cover_currentPositionLiftPercent100ths;
-static attribute_t *cover_targetPositionLiftPercent100ths;
-static attribute_t *cover_operationalStatus;
-static attribute_t *cover_configStatus;
-static attribute_t *cover_mode;
-static attribute_t *cover_featureMap;
-
-static chip::EndpointId coverEPID = chip::kInvalidEndpointId;
-void cover_set_endpoint_id(chip::EndpointId epId) { coverEPID = epId; }
-void cover_update_state(bool isOpen, bool isClosed, bool movingOpen, bool movingClosed) {
-	if (coverEPID == chip::kInvalidEndpointId) {
-		ESP_LOGE(TAG, "cover_update_state called before cover_set_endpoint_id");
-		return;
-	}
-	uint16_t targetPos = 0;
-	if (isOpen) {
-		targetPos = 1000;
-	} else if (isClosed) {
-		targetPos = 0;
-	}
-
-	// set CurrentPositionLiftPercent100ths attribute based on the state of the cover
-	esp_matter_attr_val_t currentPosAttrVal = {
-		.type = ESP_MATTER_VAL_TYPE_UINT16,
-	};
-	if (isOpen) {
-		currentPosAttrVal.val.u16 = 1000;
-	} else if (isClosed) {
-		currentPosAttrVal.val.u16 = 0;
-	} else if (movingOpen) {
-		currentPosAttrVal.val.u16 = 500; // for demo purposes, we set it to 50% when it's moving
-	} else if (movingClosed) {
-		currentPosAttrVal.val.u16 = 500; // for demo purposes, we set it to 50% when it's moving
-	} else {
-		currentPosAttrVal.val.u16 = targetPos; // if the cover is in an unknown state, we set the current position to the target position to avoid confusion.
-	}
-	esp_err_t err = attribute::update(
-		coverEPID,
-        chip::app::Clusters::WindowCovering::Id,
-        chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
-        &currentPosAttrVal
-	);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Failed to update CurrentPositionLiftPercent100ths attribute");
-	} else {
-		ESP_LOGD(TAG, "Updated CurrentPositionLiftPercent100ths attribute");
-	}
-
-	// set TargetPositionLiftPercent100ths attribute to 0 when the cover is closed, and 1000 when the cover is open. This is to make sure that the target position is in sync with the current position when the cover is fully open or fully closed. When the cover is moving, we don't update the target position so that it can be controlled by the user or other controllers.
-	uint16_t targetPosVal = 0xFFFF;
-	if (movingOpen) {
-		targetPosVal = 10000;
-	} else if (movingClosed) {
-		targetPosVal = 0;
-	} else if (isOpen) {
-		targetPosVal = 10000;
-	} else if (isClosed) {
-		targetPosVal = 0;
-	}
-	if (targetPosVal != 0xFFFF) {
-		esp_matter_attr_val_t targetPosAttrVal = {
-			.type = ESP_MATTER_VAL_TYPE_UINT16,
-			.val = {
-				.u16 = targetPosVal,
-			}
-		};
-		err = attribute::update(coverEPID,
-			chip::app::Clusters::WindowCovering::Id,
-			chip::app::Clusters::WindowCovering::Attributes::TargetPositionLiftPercent100ths::Id,
-			&targetPosAttrVal
-		);
-		if (err != ESP_OK) {
-			ESP_LOGE(TAG, "Failed to update TargetPositionLiftPercent100ths attribute");
-		} else {
-			ESP_LOGD(TAG, "Updated TargetPositionLiftPercent100ths attribute");
-		}
-	}
-
-	// set OperationalStatus attribute based on the state of the cover
-	using namespace chip::app::Clusters::WindowCovering;
-	uint8_t opStatus = 0;
-	if (movingOpen) {
-		opStatus = static_cast<uint8_t>(OperationalState::MovingUpOrOpen);
-	} else if (movingClosed) {
-		opStatus = static_cast<uint8_t>(OperationalState::MovingDownOrClose);
-	} else {
-		opStatus = static_cast<uint8_t>(OperationalState::Stall);
-	}
-	esp_matter_attr_val_t opStatusAttrVal = {
-		.type = ESP_MATTER_VAL_TYPE_BITMAP8,
-		.val = {
-			.u8 = opStatus,
-		}
-	};
-	err = attribute::update(coverEPID,
-		chip::app::Clusters::WindowCovering::Id,
-		chip::app::Clusters::WindowCovering::Attributes::OperationalStatus::Id,
-		&opStatusAttrVal
-	);
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Failed to update OperationalStatus attribute");
-	} else {
-		ESP_LOGD(TAG, "Updated OperationalStatus attribute");
-	}
-}
-
 extern "C" void app_main() {
 	esp_err_t err = ESP_OK;
 	err = nvs_flash_init();
@@ -341,31 +164,14 @@ extern "C" void app_main() {
 	ESP_ERROR_CHECK(err);
 	ESP_LOGI(TAG, "NVS init OK – ready for Matter");
 
-	// set up the led indicator
-	led_strip_config_t strip_config = {
-		.strip_gpio_num = LED_GPIO,
-		.max_leds = 1,
-		.led_pixel_format = LED_PIXEL_FORMAT_GRB,
-		.led_model = LED_MODEL_WS2812
-	};
-	led_strip_rmt_config_t rmt_config = {
-		.clk_src = RMT_CLK_SRC_DEFAULT,
-		.resolution_hz = 10000000, // 10MHz resolution (0.1us per tick)
-		.mem_block_symbols = 64,
-		.flags = {
-			.with_dma = 0, // Enable DMA for better performance
-		}
-	};
-	led_strip_new_rmt_device(&strip_config, &rmt_config, &led_status);
-	led_strip_set_pixel(led_status, 0, 0, 0, 0); // Blue color to indicate the device is powered on
-	led_strip_refresh(led_status);
-
 	app_driver_handle_t switch_handle = app_driver_switch_init();
 	app_reset_button_register(switch_handle);
-
+	led_indicator_init(&led_indicator_subsystem, LED_GPIO);
 	node::config_t node_config;
 	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
+
+	// endpoint_t *closure_endpoint = esp_matter::endpoint::closure_control::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
 
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
 	endpoint_t *root_node_ep = endpoint::get_first(node);
@@ -379,6 +185,7 @@ extern "C" void app_main() {
 	cluster::time_synchronization::feature::time_zone::add(time_sync_cluster, &tz_cfg);
 	#endif
 
+	/*
 	window_covering_device::config_t window_covering_device_config(static_cast<uint8_t>(chip::app::Clusters::WindowCovering::EndProductType::kUnknown));
 	window_covering_device_config.window_covering.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift;
 	window_covering_device_config.window_covering.type = (uint8_t)chip::app::Clusters::WindowCovering::Type::kUnknown;
@@ -414,7 +221,7 @@ extern "C" void app_main() {
 	esp_matter::endpoint::contact_sensor::config_t contact_sensor_config = {};
 	endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, &contact_sensor_config, CLUSTER_FLAG_SERVER, NULL);
 
-	/*esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
+	esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
         root_ep,
         chip::app::Clusters::BooleanState::Id,
         NULL);
@@ -432,11 +239,11 @@ extern "C" void app_main() {
 		return;
 	}
 	*/
+	endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
 	cluster::binding::config_t bind_cfg;
 	cluster::binding::create(contact_sensor_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
-	#endif
+	// #endif
 
-	ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "failed to create on off switch endpoint"));
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
@@ -450,7 +257,6 @@ extern "C" void app_main() {
 #endif
 
 #if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
-	/* This should be called before esp_matter::start() */
 	esp_matter::set_custom_commissionable_data_provider(&g_dynamic_passcode_provider);
 #endif
 	err = esp_matter::start(app_event_cb, NULL);
