@@ -38,6 +38,7 @@ static led_strip_t *led_status;
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+#include "ACLAssist.hpp"
 #include <app/util/binding-table.h>
 #include <esp_matter_client.h>
 #include <app/AttributePathParams.h>
@@ -96,67 +97,7 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 }
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-/*struct BindingKey {
-	chip::FabricIndex fabric;
-	chip::NodeId node;
-	chip::EndpointId ep;
-	chip::ClusterId cluster;
-	bool operator==(const BindingKey &other) const {
-		return fabric == other.fabric && node == other.node && ep == other.ep && cluster == other.cluster;
-	}
-};
-struct BindingKeyHash {
-    size_t operator()(const BindingKey &k) const noexcept {
-        uint64_t v = (static_cast<uint64_t>(k.fabric) << 48) ^
-                     (k.node) ^
-                     (static_cast<uint64_t>(k.ep) << 32) ^
-                     static_cast<uint64_t>(k.cluster);
-        return std::hash<uint64_t>{}(v);
-    }
-};
-*/
-/*  
-	The map stores the *index* of the ACL entry that we created for a
-	given binding.  If the entry is removed later we also erase the map
-	entry.
-*/
-// static std::unordered_map<BindingKey, size_t, BindingKeyHash> g_binding_acl_map;
 
-// helper function to check if an ACL entry already exists for the given parameters
-static CHIP_ERROR __check_acl_already_exists(chip::FabricIndex fabricIndex, chip::NodeId nodeId, chip::EndpointId endpointId, chip::ClusterId clusterId, bool &exists) {
-	exists = false;
-	// load the access control iterator
-	chip::Access::AccessControl::EntryIterator it;
-    CHIP_ERROR err = chip::Access::GetAccessControl().Entries(fabricIndex, it);
-    if (err != CHIP_NO_ERROR) {
-		ESP_LOGE(TAG, "acl access error - failed to load entries iterator from global acl");
-        return err;
-    }
-	// step through each entry with the iterator.
-    chip::Access::AccessControl::Entry entry;
-    while ((err = it.Next(entry)) == CHIP_NO_ERROR) {
-		// check the subjects and targets of the entry to see if we already have an acl entry that matches.
-        size_t subjCnt = 0;
-        entry.GetSubjectCount(subjCnt);
-        for (size_t i = 0; i < subjCnt; ++i) {
-            chip::NodeId storedNode = chip::kUndefinedNodeId;
-            entry.GetSubject(i, storedNode);
-            if (storedNode != nodeId) continue;
-            size_t tgtCnt = 0;
-            entry.GetTargetCount(tgtCnt);
-            for (size_t t = 0; t < tgtCnt; ++t) {
-                chip::Access::AccessControl::Entry::Target tgt;
-                entry.GetTarget(t, tgt);
-                if ((tgt.flags & chip::Access::AccessControl::Entry::Target::kCluster) && (tgt.flags & chip::Access::AccessControl::Entry::Target::kEndpoint) && tgt.cluster == clusterId && tgt.endpoint == endpointId) {
-                    exists = true;
-					return CHIP_NO_ERROR;
-                }
-            }
-        }
-    }
-    exists = false;
-    return CHIP_NO_ERROR;
-}
 
 #endif
 
