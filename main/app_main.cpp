@@ -96,16 +96,46 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 }
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+/*struct BindingKey {
+	chip::FabricIndex fabric;
+	chip::NodeId node;
+	chip::EndpointId ep;
+	chip::ClusterId cluster;
+	bool operator==(const BindingKey &other) const {
+		return fabric == other.fabric && node == other.node && ep == other.ep && cluster == other.cluster;
+	}
+};
+struct BindingKeyHash {
+    size_t operator()(const BindingKey &k) const noexcept {
+        uint64_t v = (static_cast<uint64_t>(k.fabric) << 48) ^
+                     (k.node) ^
+                     (static_cast<uint64_t>(k.ep) << 32) ^
+                     static_cast<uint64_t>(k.cluster);
+        return std::hash<uint64_t>{}(v);
+    }
+};
+*/
+/*  
+	The map stores the *index* of the ACL entry that we created for a
+	given binding.  If the entry is removed later we also erase the map
+	entry.
+*/
+// static std::unordered_map<BindingKey, size_t, BindingKeyHash> g_binding_acl_map;
+
 // helper function to check if an ACL entry already exists for the given parameters
-static bool __acl_entry_already_exists(chip::FabricIndex fabricIndex, chip::NodeId nodeId, chip::EndpointId endpointId, chip::ClusterId clusterId) {
+static CHIP_ERROR __check_acl_already_exists(chip::FabricIndex fabricIndex, chip::NodeId nodeId, chip::EndpointId endpointId, chip::ClusterId clusterId, bool &exists) {
+	exists = false;
+	// load the access control iterator
 	chip::Access::AccessControl::EntryIterator it;
     CHIP_ERROR err = chip::Access::GetAccessControl().Entries(fabricIndex, it);
     if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "Failed to get ACL iterator: %s", chip::ErrorStr(err));
-        return false;
+		ESP_LOGE(TAG, "acl access error - failed to load entries iterator from global acl");
+        return err;
     }
+	// step through each entry with the iterator.
     chip::Access::AccessControl::Entry entry;
     while ((err = it.Next(entry)) == CHIP_NO_ERROR) {
+		// check the subjects and targets of the entry to see if we already have an acl entry that matches.
         size_t subjCnt = 0;
         entry.GetSubjectCount(subjCnt);
         for (size_t i = 0; i < subjCnt; ++i) {
@@ -118,66 +148,16 @@ static bool __acl_entry_already_exists(chip::FabricIndex fabricIndex, chip::Node
                 chip::Access::AccessControl::Entry::Target tgt;
                 entry.GetTarget(t, tgt);
                 if ((tgt.flags & chip::Access::AccessControl::Entry::Target::kCluster) && (tgt.flags & chip::Access::AccessControl::Entry::Target::kEndpoint) && tgt.cluster == clusterId && tgt.endpoint == endpointId) {
-                    return true;
+                    exists = true;
+					return CHIP_NO_ERROR;
                 }
             }
         }
     }
-    return false;
-}
-
-static CHIP_ERROR __create_view_acl_entry(chip::FabricIndex fabricIndex, chip::NodeId nodeId, chip::EndpointId endpointId, chip::ClusterId clusterId) {
-    chip::Access::AccessControl::Entry entry;
-    CHIP_ERROR err = chip::Access::GetAccessControl().PrepareEntry(entry);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "PrepareEntry failed: %s", chip::ErrorStr(err));
-        return err;
-    }
-    entry.SetAuthMode(chip::Access::AuthMode::kCase);
-    entry.SetFabricIndex(fabricIndex);
-    entry.SetPrivilege(chip::Access::Privilege::kView);
-    size_t subjIdx = 0;
-    err = entry.AddSubject(&subjIdx, nodeId);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "AddSubject failed: %s", chip::ErrorStr(err));
-        return err;
-    }
-    chip::Access::AccessControl::Entry::Target tgt;
-    tgt.flags = chip::Access::AccessControl::Entry::Target::kEndpoint | chip::Access::AccessControl::Entry::Target::kCluster;
-    tgt.endpoint = endpointId;
-    tgt.cluster  = clusterId;
-    size_t tgtIdx = 0;
-    err = entry.AddTarget(&tgtIdx, tgt);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "AddTarget failed: %s", chip::ErrorStr(err));
-        return err;
-    }
-    size_t newIdx = 0;
-    err = chip::Access::GetAccessControl().CreateEntry(nullptr, fabricIndex, &newIdx, entry);
-    if (err != CHIP_NO_ERROR) {
-        ESP_LOGE(TAG, "CreateEntry failed: %s", chip::ErrorStr(err));
-        return err;
-    }
-    ESP_LOGI(TAG, "Created ACL entry idx=%zu for node 0x%" PRIx64 " (fabric=%u) → EP%u/Cluster0x%04x (View)", newIdx, nodeId, fabricIndex, endpointId, static_cast<uint16_t>(clusterId));
+    exists = false;
     return CHIP_NO_ERROR;
 }
 
-static void ensure_acl_for_existing_bindings(void) {
-	chip::DeviceLayer::PlatformMgr().ScheduleWork(
-		[](intptr_t) {
-			chip::DeviceLayer::PlatformMgr().LockChipStack();
-			for (const auto &binding : chip::BindingTable::GetInstance()) {
-				if (binding.type != MATTER_UNICAST_BINDING) continue;
-				if (!binding.clusterId.has_value() || binding.clusterId.value() != chip::app::Clusters::BooleanState::Id) continue;
-
-				if (!__acl_entry_already_exists(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value())) {
-					__create_view_acl_entry(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value());
-				}
-			}
-			chip::DeviceLayer::PlatformMgr().UnlockChipStack();
-		},
-	0);
-}
 #endif
 
 static uint16_t event_stage = 0;
@@ -240,7 +220,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 				ESP_LOGI(
 					TAG,
 					"ITERATING IN THE LOOP");
-				if (!__acl_entry_already_exists(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value())) {
+				/*if (!__acl_entry_already_exists(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value())) {
 					CHIP_ERROR err = __create_view_acl_entry(binding.fabricIndex, binding.nodeId, binding.remote, binding.clusterId.value());
 					if (err != CHIP_NO_ERROR) {
 						ESP_LOGW(TAG, "Failed to add ACL for node 0x%" PRIx64 " – continue anyway", binding.nodeId);
@@ -249,7 +229,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 					ESP_LOGI(TAG,
 								"ACL entry already present for node 0x%" PRIx64,
 								binding.nodeId);
-				}
+				}*/
 			}
 			// chip::DeviceLayer::PlatformMgr().UnlockChipStack();
 		/*},
