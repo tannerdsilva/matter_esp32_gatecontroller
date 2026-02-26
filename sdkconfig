@@ -563,6 +563,8 @@ CONFIG_PARTITION_TABLE_MD5=y
 # Example Configuration
 #
 CONFIG_SUBSCRIBE_AFTER_BINDING=y
+CONFIG_MODE_PRIMARY_CLOSURE=y
+# CONFIG_MODE_PRIMARY_CHIME is not set
 # end of Example Configuration
 
 #

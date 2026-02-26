@@ -35,4 +35,28 @@ menu "Example Configuration"
         default y
         help
             "When enabled the firmware will automatically create a Matter subscription after a binding entry is added. This option pulls in the extra client‑side code needed to receive attribute reports from a BooleanState (contact‑sensor) cluster."
+
+	choice
+        prompt "Device Primary Mode"
+        default MODE_PRIMARY_CLOSURE
+        help
+          Select which primary functionality the device will expose.
+          Only ONE of the three options can be enabled at a time.
+          The selected mode can be used with “depends on MODE_PRIMARY_…”
+          in other Kconfig symbols or source files.
+
+        config MODE_PRIMARY_CLOSURE
+            bool "Closure mode (window‑covering endpoint only)"
+            help
+              Build the firmware for the *closure* use‑case.  This enables the
+              WindowCovering server cluster and disables the chime/cover specific
+              code paths.
+
+        config MODE_PRIMARY_CHIME
+            bool "Chime mode (door‑bell / sound endpoint only)"
+            help
+              Build the firmware for the *chime* use‑case.  This enables the
+              Identify/OnOff clusters needed for a door‑bell style device.
+
+	endchoice
 endmenu

@@ -11,12 +11,15 @@
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
-// #include <app/clusters/window-covering-server/window-covering-server.h>
 #include <app/clusters/bindings/binding-table.h>
 #include <app/clusters/boolean-state-server/boolean-state-cluster.h>
 #include <esp_matter_providers.h>
 #include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
+
+#ifdef CONFIG_MODE_PRIMARY_CLOSURE
+#include "closure_control.hpp"
+#endif
 
 #include <common_macros.h>
 #include <app_priv.h>
@@ -167,6 +170,7 @@ extern "C" void app_main() {
 	app_driver_handle_t switch_handle = app_driver_switch_init();
 	app_reset_button_register(switch_handle);
 	led_indicator_init(&led_indicator_subsystem, LED_GPIO);
+
 	node::config_t node_config;
 	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
@@ -239,9 +243,9 @@ extern "C" void app_main() {
 		return;
 	}
 	*/
-	endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
-	cluster::binding::config_t bind_cfg;
-	cluster::binding::create(contact_sensor_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
+	// endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
+	// cluster::binding::config_t bind_cfg;
+	// cluster::binding::create(contact_sensor_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 	// #endif
 
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);

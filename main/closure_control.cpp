@@ -1,8 +1,12 @@
+#ifdef CONFIG_MODE_PRIMARY_CLOSURE
 #include "closure_control.hpp"
-#include <esp_matter/data_model/esp_matter_endpoint.h>
 
-esp_err_t endpoint_create_closure_controller(node_t *node, endpoint_t **endpoint_out) {
-	esp_matter::endpoint::closure_controller::config_t closure_controller_config = {};
-    // Implementation for creating a closure controller endpoint
-    return ESP_OK;
+#include <esp_matter_endpoint.h>
+
+using namespace esp_matter;
+endpoint_t *endpoint_create_closure(node_t *node) {
+	endpoint::closure::config_t closure_controller_config = {};
+	return endpoint::closure::create(node, &closure_controller_config, CLUSTER_FLAG_SERVER, NULL);
 }
+
+#endif // CONFIG_MODE_PRIMARY_CLOSURE
