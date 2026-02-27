@@ -17,8 +17,11 @@
 #include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
 
+#include "bindings_core.h"
 #ifdef CONFIG_MODE_PRIMARY_CLOSURE
-#include "closure_control.hpp"
+#include "closure_control.h"
+#elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
+#include "window_covering.h"
 #endif
 
 #include <common_macros.h>
@@ -28,7 +31,6 @@
 // led indicator support
 #include "led_indicator.hpp"
 led_indicator_subsystem_t led_indicator_subsystem;
-
 
 #define LED_GPIO   GPIO_NUM_8
 #define BLINK_MS   200
@@ -136,6 +138,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGI(TAG, "Bindings changed via cluster");
+		handle_binding_changed_event();
 		break;
     }
     break;
@@ -174,11 +177,33 @@ extern "C" void app_main() {
 	node::config_t node_config;
 	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
+	
+	#ifdef CONFIG_MODE_PRIMARY_CLOSURE
+	
+	// CLOSURE MODE (matter v1.5)
+	
+	endpoint_t *closure_endpoint = endpoint_create_closure(node);
+	ABORT_APP_ON_FAILURE(closure_endpoint != nullptr, ESP_LOGE(TAG, "failed to create closure endpoint"));
+	switch_endpoint_id = endpoint::get_id(closure_endpoint);
+	ESP_LOGI(TAG, "Closure Control Endpoint created with endpoint id %d", switch_endpoint_id);
+	
+	#elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
+	
+	// WINDOW COVERING LEGACY MODE (matter v1.0)
+	
+	endpoint_t *window_covering_endpoint = endpoint_create_window_covering(node);
+	ABORT_APP_ON_FAILURE(window_covering_endpoint != nullptr, ESP_LOGE(TAG, "failed to create window covering endpoint"));
+	switch_endpoint_id = endpoint::get_id(window_covering_endpoint);
+	ESP_LOGI(TAG, "Window Covering Endpoint created with endpoint id %d", switch_endpoint_id);
+	
+	#endif
 
-	// endpoint_t *closure_endpoint = esp_matter::endpoint::closure_control::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
+	// the root endpoint of the data model.
+	endpoint_t *root_node_ep = endpoint::get_first(node);
+	cluster::binding::config_t bind_cfg;
+	cluster::binding::create(root_node_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
-	endpoint_t *root_node_ep = endpoint::get_first(node);
 	ABORT_APP_ON_FAILURE(root_node_ep != nullptr, ESP_LOGE(TAG, "Failed to find root node endpoint"));
 	cluster::time_synchronization::config_t time_sync_cfg;
 	static chip::app::Clusters::TimeSynchronization::DefaultTimeSyncDelegate time_sync_delegate;
@@ -244,8 +269,6 @@ extern "C" void app_main() {
 	}
 	*/
 	// endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
-	// cluster::binding::config_t bind_cfg;
-	// cluster::binding::create(contact_sensor_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 	// #endif
 
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
@@ -263,6 +286,7 @@ extern "C" void app_main() {
 #if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
 	esp_matter::set_custom_commissionable_data_provider(&g_dynamic_passcode_provider);
 #endif
+
 	err = esp_matter::start(app_event_cb, NULL);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to start Matter, err:%d", err));
 }

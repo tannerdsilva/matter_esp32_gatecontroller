@@ -1,4 +1,3 @@
-/* wc_manager.h ------------------------------------------------------------ */
 #pragma once
 
 #include <app/clusters/window-covering-server/window-covering-server.h>
@@ -17,8 +16,7 @@ namespace WindowCovering {
  * standard MotionStarted / MotionStopped events so that a Matter controller
  * can see what is happening.
  */
-class MyWindowCoveringManager: public Delegate
-{
+class MyWindowCoveringManager: public Delegate {
 public:
     CHIP_ERROR HandleMovement(WindowCoveringType type) override;
     CHIP_ERROR HandleStopMotion() override;

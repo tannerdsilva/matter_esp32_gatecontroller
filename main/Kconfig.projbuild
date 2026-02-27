@@ -46,17 +46,21 @@ menu "Example Configuration"
           in other Kconfig symbols or source files.
 
         config MODE_PRIMARY_CLOSURE
-            bool "Closure mode (window‑covering endpoint only)"
+            bool "Closure mode"
             help
               Build the firmware for the *closure* use‑case.  This enables the
               WindowCovering server cluster and disables the chime/cover specific
               code paths.
 
         config MODE_PRIMARY_CHIME
-            bool "Chime mode (door‑bell / sound endpoint only)"
+            bool "Chime mode"
             help
               Build the firmware for the *chime* use‑case.  This enables the
               Identify/OnOff clusters needed for a door‑bell style device.
-
+			
+        config MODE_WINDOW_COVERING_LEGACY
+            bool "Window Covering Legacy mode"
+            help
+              Build the firmware for the *window covering legacy* use‑case. This enables the WindowCovering server cluster without the closure control cluster, and disables the chime/closure specific code paths.
 	endchoice
 endmenu
