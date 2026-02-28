@@ -81,7 +81,34 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 	m_subs.emplace(key, std::move(sub));
 
 	esp_err_t rc = esp_matter::client::set_request_callback(once_cb, nullptr, sub_ptr);
+	if (rc != ESP_OK) {
+		ESP_LOGE(TAG, "failed to set client callback: %d", rc);
+		RemoveBinding(entry);
+		return rc;
+	}
+
+	// connect
+	rc = esp_matter::client::connect(
+		chip::Server::GetInstance().GetCASESessionManager(),
+		entry.fabricIndex,
+		entry.nodeId,
+		&req
+	);
+
+	if (rc != ESP_OK) {
+		ESP_LOGE(TAG, "failed to connect to peer: %d", rc);
+		RemoveBinding(entry);
+		return rc;
+	}
+
+	// if connect was successful, we are now waiting for the callback to fire with the result.
 	return ESP_OK;
+}
+
+void SubscriptionManager::RemoveBinding(const chip::app::Clusters::Binding::TableEntry &entry) {
+	uint64_t key = MakeKey(entry.fabricIndex, entry.nodeId, entry.remote);
+	// std::lock_guard<std::mutex> lock(m_mutex);
+	// m_subs.erase(key);
 }
 
 class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {

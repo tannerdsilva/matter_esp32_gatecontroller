@@ -137,31 +137,22 @@ void app_driver_client_group_invoke_command_callback(uint8_t fabric_index, clien
     ESP_LOGE(TAG, "GROUP INVOKE COMMAND CALLBACK RECEIVED: fabric_index=%d", fabric_index);
 }
 
-static void app_driver_button_toggle_cb(void *arg, void *data)
-{
+static void app_driver_button_toggle_cb(void *arg, void *data) {
     ESP_LOGI(TAG, "Toggle button pressed");
     client::request_handle_t req_handle;
     req_handle.type = esp_matter::client::INVOKE_CMD;
     req_handle.command_path.mClusterId = OnOff::Id;
     req_handle.command_path.mCommandId = OnOff::Commands::Toggle::Id;
-
     // lock::chip_stack_lock(portMAX_DELAY);
     client::cluster_update(switch_endpoint_id, &req_handle);
     // lock::chip_stack_unlock();
 }
 
-app_driver_handle_t app_driver_switch_init()
-{
-    /* Initialize button */
-
+app_driver_handle_t app_driver_switch_init() {
     button_handle_t btns[BSP_BUTTON_NUM];
     ESP_ERROR_CHECK(bsp_iot_button_create(btns, NULL, BSP_BUTTON_NUM));
     ESP_ERROR_CHECK(iot_button_register_cb(btns[0], BUTTON_PRESS_DOWN, NULL, app_driver_button_toggle_cb, NULL));
-	/* Other initializations */
-    client::set_request_callback(app_driver_client_callback,
-                                 app_driver_client_group_invoke_command_callback, NULL);
-
+    client::set_request_callback(app_driver_client_callback, app_driver_client_group_invoke_command_callback, NULL);
 	ESP_LOGI(TAG, "APP DRIVER INITIALIZED");
-
     return (app_driver_handle_t)btns[0];
 }
