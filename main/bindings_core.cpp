@@ -1,6 +1,7 @@
 #include "bindings_core.h"
 #include <mutex>
 #include <map>
+#include <vector>
 #include <esp_log.h>
 #include <esp_matter_client.h>
 #include <app/ReadClient.h>
@@ -41,12 +42,53 @@ class SubscriptionManager {
 		std::map<uint64_t, std::unique_ptr<Subscription>> m_subs;
 };
 
+
 // create a new key for the 
 static uint64_t MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
 	return (static_cast<uint64_t>(fabric) << 56) | ((node & 0xFFFFFFFFFFFFULL) << 8) | (ep & 0xFFULL);
 }
 
+class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {
+	public:
+		// BooleanStateSubscriptionCallback(Subscription *sub) : m_subs(sub) {}
+		void OnReportBegin() override {
+			ESP_LOGI(TAG, "Report Begin");
+		}
+		void OnReportEnd() override {
+			ESP_LOGI(TAG, "Report End");
+		}
 
+		void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+			ESP_LOGE(TAG, "SUBSCRIPTION ESTABLISHED");
+		}
+
+		void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
+			// Handle the attribute data
+			ESP_LOGE(TAG, "\tATTRIBUTE DATA RECEIVED");
+			if (aPath.mClusterId == chip::app::Clusters::BooleanState::Id) {
+				ESP_LOGE(TAG, "\t\tATTRIBUTE DATA FOR BOOLEAN STATE CLUSTER");
+				if (aPath.mAttributeId == chip::app::Clusters::BooleanState::Attributes::StateValue::Id) {
+					ESP_LOGE(TAG, "\t\t\tReceived BooleanState attribute");
+				}
+			}
+		}
+
+		void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
+			ESP_LOGE(TAG, "EVENT DATA!");
+		}
+
+		void OnError(CHIP_ERROR aError) override {
+			// Handle the error
+			ESP_LOGE(TAG, "ReadClient Error: %s", ErrorStr(aError));
+		}
+
+		void OnDone(chip::app::ReadClient * apReadClient) override {
+			// Cleanup after done
+			ESP_LOGE(TAG, "ReadClient Done");
+		}
+};
+
+// call _once_ for each new binding entry.
 esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::TableEntry &entry) {
 	chip::app::AttributePathParams attr_path;
 	attr_path.mEndpointId = entry.remote;
@@ -64,7 +106,19 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 	auto once_cb = [](esp_matter::client::peer_device_t *peer, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
 		// priv points to the Subscription entry we have just allocated
 		Subscription *sub = static_cast<Subscription *>(priv_data);
-		ESP_LOGI(TAG, "CASE session established...performing validation READ");
+
+		/*
+		esp_err_t readerr = esp_matter::client::interaction::read::send_request(
+			peer,
+			&req_handle->attribute_path,
+			1,
+			nullptr,
+			0,
+			*new class BooleanStateSubscriptionCallback(sub)
+		);
+		*/
+		ESP_LOGI(TAG, "CASE session established...performing validation READ.");
+		// ESP_LOGI(TAG, "CASE session established...performing validation READ. Node metadata: %d, %d, %d", peer->fabric_index, peer->node_id, peer->endpoint_id);
 	};
 
 	// allocate a subscription object and store it in the map *before* we start the async connection.
@@ -127,49 +181,48 @@ void SubscriptionManager::RemoveBinding(const chip::app::Clusters::Binding::Tabl
 	// m_subs.erase(key);
 }
 
-class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {
-	public:
-		void OnReportBegin() override {
-			ESP_LOGI(TAG, "Report Begin");
-		}
-		void OnReportEnd() override {
-			ESP_LOGI(TAG, "Report End");
-		}
-
-		void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
-			ESP_LOGE(TAG, "SUBSCRIPTION ESTABLISHED");
-		}
-
-		void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
-			// Handle the attribute data
-			ESP_LOGE(TAG, "\tATTRIBUTE DATA RECEIVED");
-			if (aPath.mClusterId == chip::app::Clusters::BooleanState::Id) {
-				ESP_LOGE(TAG, "\t\tATTRIBUTE DATA FOR BOOLEAN STATE CLUSTER");
-				if (aPath.mAttributeId == chip::app::Clusters::BooleanState::Attributes::StateValue::Id) {
-					ESP_LOGE(TAG, "\t\t\tReceived BooleanState attribute");
-				}
-			}
-		}
-
-		void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
-			ESP_LOGE(TAG, "EVENT DATA!");
-		}
-
-		void OnError(CHIP_ERROR aError) override {
-			// Handle the error
-			ESP_LOGE(TAG, "ReadClient Error: %s", ErrorStr(aError));
-		}
-
-		void OnDone(chip::app::ReadClient * apReadClient) override {
-			// Cleanup after done
-			ESP_LOGE(TAG, "ReadClient Done");
-		}
-};
+Subscription *SubscriptionManager::Find(const chip::app::Clusters::Binding::TableEntry &key) {
+	uint64_t map_key = MakeKey(key.fabricIndex, key.nodeId, key.remote);
+	auto it = m_subs.find(map_key);
+	if (it != m_subs.end()) {
+		return it->second.get();
+	}
+	return nullptr;
+}
 
 void handle_binding_changed_event() {
-	ESP_LOGI(TAG, "BINDING TABLE CHANGED");
+	ESP_LOGE(TAG, "BINDING TABLE CHANGED");
 	chip::app::Clusters::Binding::TableEntry binding_table;
-	for (auto &binding : chip::app::Clusters::Binding::Table::GetInstance()) {
+	chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
+	size_t tableSize = gtableInstance.Size();
+	size_t i = 0;
+	for (i = 0; i < tableSize; i++) {
+		// store the current entry on the stack.
+		chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
+       
+		// validate that this endpoint has a cluster ID that is not null and that we support it.
+		if ((bindingTableEntry.clusterId != std::nullopt) && (bindingTableEntry.clusterId != chip::app::Clusters::BooleanState::Id)) {
+			// not a cluster we can interact with, skip it.
+			continue;
+		}
 
+		// check if we already have a subscription
+		if (SubscriptionManager::GetInstance().Find(bindingTableEntry) != nullptr) {
+			// we already have a subscription for this binding, skip it.
+			continue;
+		}
+
+		// all checks done. ask the manager to start a subscription.
+		esp_err_t rc = SubscriptionManager::GetInstance().AddBinding(bindingTableEntry);
+		if (rc != ESP_OK) {
+			ESP_LOGE(TAG, "failed to add binding subscription");
+			continue;
+		}
+	}
+
+	// cleanup the removed entries.
+	std::vector<chip::app::Clusters::Binding::TableEntry> current_entries;
+	for (i = 0; i < tableSize; i++) {
+		current_entries.push_back(gtableInstance.GetAt(i));
 	}
 }
