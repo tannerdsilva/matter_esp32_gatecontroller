@@ -41,6 +41,12 @@ class SubscriptionManager {
 		std::map<uint64_t, std::unique_ptr<Subscription>> m_subs;
 };
 
+// create a new key for the 
+static uint64_t MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
+	return (static_cast<uint64_t>(fabric) << 56) | ((node & 0xFFFFFFFFFFFFULL) << 8) | (ep & 0xFFULL);
+}
+
+
 esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::TableEntry &entry) {
 	chip::app::AttributePathParams attr_path;
 	attr_path.mEndpointId = entry.remote;
@@ -69,9 +75,10 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 	sub->fabric_index = entry.fabricIndex;
 
 	Subscription *sub_ptr = sub.get();
-
-	std::lock_guard<std::mutex> lock(m_mutex);
-
+	// insert the subscription into the memorymap
+	// std::lock_guard<std::mutex> lock(m_mutex);
+	uint64_t key = MakeKey(entry.fabricIndex, entry.nodeId, entry.remote);
+	m_subs.emplace(key, std::move(sub));
 	return ESP_OK;
 }
 
@@ -113,10 +120,6 @@ class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback 
 			ESP_LOGE(TAG, "ReadClient Done");
 		}
 };
-
-static uint64_t MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
-	return (static_cast<uint64_t>(fabric) << 56) | ((node & 0xFFFFFFFFFFFFULL) << 8) | (ep & 0xFFULL);
-}
 
 void handle_binding_changed_event() {
 	ESP_LOGI(TAG, "BINDING TABLE CHANGED");
