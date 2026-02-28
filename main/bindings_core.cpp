@@ -79,6 +79,8 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 	// std::lock_guard<std::mutex> lock(m_mutex);
 	uint64_t key = MakeKey(entry.fabricIndex, entry.nodeId, entry.remote);
 	m_subs.emplace(key, std::move(sub));
+
+	esp_err_t rc = esp_matter::client::set_request_callback(once_cb, nullptr, sub_ptr);
 	return ESP_OK;
 }
 
