@@ -1,13 +1,12 @@
 #include "bindings_core.h"
-#include <unordered_map>
 #include <mutex>
 #include <map>
 #include <esp_log.h>
 #include <esp_matter_client.h>
 #include <app/ReadClient.h>
 #include <app/clusters/bindings/binding-table.h>
+#include <app/AttributePathParams.h>
 #include <lib/core/TLVReader.h>
-
 
 const char *TAG = "BINDINGS_CORE";
 
@@ -21,6 +20,7 @@ struct Subscription {
     std::unique_ptr<chip::app::ReadClient> read_client;
 };
 
+// manages all of the individual instances of subscriptions.
 class SubscriptionManager {
 	public:
 		static SubscriptionManager &GetInstance() {
@@ -40,6 +40,40 @@ class SubscriptionManager {
 
 		std::map<uint64_t, std::unique_ptr<Subscription>> m_subs;
 };
+
+esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::TableEntry &entry) {
+	chip::app::AttributePathParams attr_path;
+	attr_path.mEndpointId = entry.remote;
+	attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
+	attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
+	attr_path.mListIndex = 0;
+
+	// attempt to read the attribute and if it works, create a subscription for it.
+	esp_matter::client::request_handle_t req;
+	req.type = esp_matter::client::READ_ATTR;
+	req.attribute_path = attr_path;
+	req.request_data = nullptr;
+
+	// declare a single callback that will read the attribute response once, and if the value exists as expected, will create a subscription for the binding.
+	auto once_cb = [](esp_matter::client::peer_device_t *peer, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
+		// priv points to the Subscription entry we have just allocated
+		Subscription *sub = static_cast<Subscription *>(priv_data);
+		ESP_LOGI(TAG, "CASE session established...performing validation READ");
+	};
+
+	// allocate a subscription object and store it in the map *before* we start the async connection.
+	auto sub = std::make_unique<Subscription>();
+	sub->local_ep = entry.local;
+	sub->remote_ep = entry.remote;
+	sub->remote_node_id = entry.nodeId;
+	sub->fabric_index = entry.fabricIndex;
+
+	Subscription *sub_ptr = sub.get();
+
+	std::lock_guard<std::mutex> lock(m_mutex);
+
+	return ESP_OK;
+}
 
 class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {
 	public:
@@ -79,6 +113,10 @@ class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback 
 			ESP_LOGE(TAG, "ReadClient Done");
 		}
 };
+
+static uint64_t MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
+	return (static_cast<uint64_t>(fabric) << 56) | ((node & 0xFFFFFFFFFFFFULL) << 8) | (ep & 0xFFULL);
+}
 
 void handle_binding_changed_event() {
 	ESP_LOGI(TAG, "BINDING TABLE CHANGED");
