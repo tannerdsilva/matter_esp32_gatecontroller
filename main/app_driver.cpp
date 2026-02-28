@@ -116,9 +116,7 @@ void app_driver_client_invoke_command_callback(client::peer_device_t *peer_devic
             ESP_LOGE(TAG, "Unsupported cluster");
             return;
         }
-        client::interaction::invoke::send_request(NULL, peer_device, req_handle->command_path, command_data_str,
-                                                  send_command_success_callback, send_command_failure_callback,
-                                                  chip::NullOptional);
+        client::interaction::invoke::send_request(NULL, peer_device, req_handle->command_path, command_data_str, send_command_success_callback, send_command_failure_callback, chip::NullOptional);
     }
     return;
 }

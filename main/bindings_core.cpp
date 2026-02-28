@@ -107,6 +107,22 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 
 void SubscriptionManager::RemoveBinding(const chip::app::Clusters::Binding::TableEntry &entry) {
 	uint64_t key = MakeKey(entry.fabricIndex, entry.nodeId, entry.remote);
+	auto it = m_subs.find(key);
+	if (it != m_subs.end()) {
+		ESP_LOGW(TAG, "Removing subscription for fabric %d, node 0x%llx, ep %d", entry.fabricIndex, entry.nodeId, entry.remote);
+		return;
+	}
+
+	Subscription *sub = it->second.get();
+
+	if (sub->read_client) {
+		// TODO: need to audit the source code and ensure this is the proper way to clean up a read client that may or may not have an active subscription. We may need to trigger an explicit "shutdown" of the read client before releasing it.
+		sub->read_client.reset();
+	}
+
+	sub->peer = nullptr;
+
+	m_subs.erase(it);
 	// std::lock_guard<std::mutex> lock(m_mutex);
 	// m_subs.erase(key);
 }
