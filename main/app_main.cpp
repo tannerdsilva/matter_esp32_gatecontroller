@@ -138,7 +138,6 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGI(TAG, "bindings changed via cluster");
-		handle_binding_changed_event();
 		break;
     }
     break;
