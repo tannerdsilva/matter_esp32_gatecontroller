@@ -42,8 +42,21 @@ esp_err_t SubscriptionManager::StartSubscription(Subscription *sub) {
 		Subscription *sub = static_cast<Subscription *>(priv_data);
 		ESP_LOGE(TAG, "CASE session established...performing validation READ.");
 		// the readclient takes ownership of the callback object.
-		// auto *cb = new class BooleanStateSubscriptionCallback(sub);
-		// the sdk will free the ReadClient once OnDone() fires.
+		auto cb = new BooleanStateSubscriptionCallback();
+		esp_err_t rc = esp_matter::client::interaction::read::send_request(
+            peer,
+            &req_handle->attribute_path,
+            1,
+            nullptr,
+            0,
+            *cb
+        );
+		if (rc != ESP_OK) {
+			ESP_LOGE(TAG, "failed to send read request: %d", rc);
+			delete cb;
+			return;
+		}
+		return (void)rc;
 	};
 
 	// store a pointer to the subscription in the request callback priv data.

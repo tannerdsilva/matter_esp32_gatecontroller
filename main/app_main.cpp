@@ -32,14 +32,14 @@
 #include "led_indicator.hpp"
 led_indicator_subsystem_t led_indicator_subsystem;
 
-#define LED_GPIO   GPIO_NUM_8
-#define BLINK_MS   200
-#define LED_COUNT   1
+#define LED_GPIO		GPIO_NUM_8
+#define BLINK_MS		200
+#define LED_COUNT		1
 
 // pin layouts picked based on the esp32-h2 dev board.
 #define GPIO_OUTPUT_COVER_OPEN			GPIO_NUM_2
 #define GPIO_OUTPUT_COVER_CLOSE			GPIO_NUM_3
-#define GPIO OUTPUT_COVER_STOP			GPIO_NUM_4
+#define GPIO_OUTPUT_COVER_STOP			GPIO_NUM_4
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
