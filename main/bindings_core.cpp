@@ -123,6 +123,7 @@ esp_err_t SubscriptionManager::FinishAdditions(std::map<uint64_t, std::unique_pt
 		AbortAndDelete(sub);
 	}
 	m_subs.clear();
+	m_subs.swap(new_sub_assemble);
 	return ESP_OK;
 }
 
