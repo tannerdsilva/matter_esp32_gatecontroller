@@ -90,91 +90,27 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 	// check if the subscription already exists
 	auto it_old = m_subs.find(key);
 	if (it_old != m_subs.end()) {
-		// move the existing unique_ptr to the new map to indicate that this subscription should be retained. the manager no longer owns this subscription after this point,
-		new_sub_assemble.emplace(key, std::move(it_old->second));
+		// subscription already exists, and needs to continue to exist. shift ownership of the subscription from the old map to the new map so that it doesn't get cleaned up, and mark it as "added" by putting it in the new map.
+		new_sub_assemble[key] = std::move(it_old->second);
 		m_subs.erase(it_old);
 		return ESP_OK;
 	}
-	
+
+	// no existing subscription, create a new one and start it.
 	auto sub = std::make_unique<Subscription>();
-	sub->local_ep = entry.local;
-	sub->remote_ep = entry.remote;
-	sub->remote_node_id = entry.nodeId;
 	sub->fabric_index = entry.fabricIndex;
-
-	// keep a raw pointer for the callback (the map will own the Subscription)
-	Subscription *sub_raw = sub.get();
-
-	// insert into the *temporary* map that the caller is building.
-	new_sub_assemble.emplace(key, std::move(sub));
-	
-	// ---------------------
-	/*
-	// attribute path params.
-	chip::app::AttributePathParams attr_path;
-	attr_path.mEndpointId = entry.remote;
-	attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
-	attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
-	attr_path.mListIndex = 0;
-
-	// attempt to read the attribute and if it works, create a subscription for it.
-	esp_matter::client::request_handle_t req;
-	req.type = esp_matter::client::READ_ATTR;
-	req.attribute_path = attr_path;
-	req.request_data = nullptr;
-
-	// declare a single callback that will read the attribute response once, and if the value exists as expected, will create a subscription for the binding.
-	auto once_cb = [](esp_matter::client::peer_device_t *peer, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
-		// priv points to the Subscription entry we have just allocated
-		Subscription *sub = static_cast<Subscription *>(priv_data);
-
-		esp_err_t readerr = esp_matter::client::interaction::read::send_request(
-			peer,
-			&req_handle->attribute_path,
-			1,
-			nullptr,
-			0,
-			*new class BooleanStateSubscriptionCallback(sub)
-		);
-		ESP_LOGI(TAG, "CASE session established...performing validation READ.");
-		// ESP_LOGI(TAG, "CASE session established...performing validation READ. Node metadata: %d, %d, %d", peer->fabric_index, peer->node_id, peer->endpoint_id);
-	};
-
-	// allocate a subscription object and store it in the map *before* we start the async connection.
-	auto sub = std::make_unique<Subscription>();
-	sub->local_ep = entry.local;
-	sub->remote_ep = entry.remote;
 	sub->remote_node_id = entry.nodeId;
-	sub->fabric_index = entry.fabricIndex;
+	sub->remote_ep = entry.remote;
+	sub->local_ep = entry.local;
 
+	// keep a raw pointer to the subscription.
 	Subscription *sub_ptr = sub.get();
-	// insert the subscription into the memorymap
-	// std::lock_guard<std::mutex> lock(m_mutex);
-	uint64_t key = MakeKey(entry.fabricIndex, entry.nodeId, entry.remote);
-	m_subs.emplace(key, std::move(sub));
 
-	esp_err_t rc = esp_matter::client::set_request_callback(once_cb, nullptr, sub_ptr);
-	if (rc != ESP_OK) {
-		ESP_LOGE(TAG, "failed to set client callback: %d", rc);
-		RemoveBinding(entry);
-		return rc;
-	}
+	// insert into the temporary map that is being built during this update phase.
+	new_sub_assemble[key] = std::move(sub);
 
-	// connect
-	rc = esp_matter::client::connect(
-		chip::Server::GetInstance().GetCASESessionManager(),
-		entry.fabricIndex,
-		entry.nodeId,
-		&req
-	);
-
-	if (rc != ESP_OK) {
-		ESP_LOGE(TAG, "failed to connect to peer: %d", rc);
-		RemoveBinding(entry);
-		return rc;
-	}
-	*/
-	// if connect was successful, we are now waiting for the callback to fire with the result.
+	// start the subscription now. the callback will be owned by the ReadClient that is stored in the Subscription.
+	esp_err_t rc = StartSubscription(sub_ptr);
 	return ESP_OK;
 }
 
