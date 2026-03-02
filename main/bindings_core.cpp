@@ -111,6 +111,18 @@ esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::Ta
 
 	// start the subscription now. the callback will be owned by the ReadClient that is stored in the Subscription.
 	esp_err_t rc = StartSubscription(sub_ptr);
+	if (rc != ESP_OK) {
+		new_sub_assemble.erase(key);
+	}
+	return ESP_OK;
+}
+
+esp_err_t SubscriptionManager::FinishAdditions(std::map<uint64_t, std::unique_ptr<Subscription>> &new_sub_assemble) {
+	for (auto &kv : m_subs) {
+		Subscription *sub = kv.second.get();
+		AbortAndDelete(sub);
+	}
+	m_subs.clear();
 	return ESP_OK;
 }
 
