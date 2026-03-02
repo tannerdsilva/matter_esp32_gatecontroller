@@ -45,7 +45,7 @@ class SubscriptionManager {
 		esp_err_t AddBinding(const chip::app::Clusters::Binding::TableEntry &entry, std::map<uint64_t, std::unique_ptr<Subscription>> &new_sub_assemble);
 		// called once after the entire table has been processed. any bindings that were not marked as "added" during the AddBinding phase will be removed during this phase.
 		esp_err_t FinishAdditions(std::map<uint64_t, std::unique_ptr<Subscription>> &new_sub_assemble);
-	
+
 	private:
 		// instance bullshit 
 		SubscriptionManager() = default;
@@ -56,6 +56,9 @@ class SubscriptionManager {
 		// stores the subscriptions for the bindings as they were known at the last time the bindings table was updated.
 		std::map<uint64_t, std::unique_ptr<Subscription>> m_subs;
 
+		// only to be used while the manager still owns the old map.
+		Subscription *Find(const chip::app::Clusters::Binding::TableEntry &key);
+
 		// keys - - - - - 
 
 		// fabric values to hash
@@ -63,9 +66,6 @@ class SubscriptionManager {
 		// hash to fabric values so it is safe to start the subscription before the unique_ptr is moved into the manager/ so it is safe to start the subscription before the unique_ptr is moved into the manager's map.'s map.
 		void ReverseHash(uint64_t key, uint8_t &fabric, uint64_t &node, uint16_t &ep);
 	
-		// only to be used while the manager still owns the old map.
-		Subscription *Find(const chip::app::Clusters::Binding::TableEntry &key);
-
 		// subscriptions - - - - -
 
 		// initiates a subscription
@@ -73,3 +73,5 @@ class SubscriptionManager {
 		// aborts and deletes a subscription.
 		void AbortAndDelete(Subscription *sub);
 };
+
+void handle_binding_changed_event();

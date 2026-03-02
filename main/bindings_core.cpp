@@ -127,42 +127,14 @@ esp_err_t SubscriptionManager::FinishAdditions(std::map<uint64_t, std::unique_pt
 	return ESP_OK;
 }
 
-
-/*
 void handle_binding_changed_event() {
 	chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
+
+	std::map<uint64_t, std::unique_ptr<Subscription>> new_subs;
+
 	size_t tableSize = gtableInstance.Size();
 	size_t i = 0;
 
-	// iterate through the existing cached values and see if any of them have been removed
-	for (const auto &kv : SubscriptionManager::GetInstance().m_subs) {
-		const Subscription *sub = kv.second.get();
-		chip::app::Clusters::Binding::TableEntry current_entry;
-		current_entry.fabricIndex = sub->fabric_index;
-		current_entry.nodeId = sub->remote_node_id;
-		current_entry.remote = sub->remote_ep;
-		current_entry.local = sub->local_ep;
-		bool found = false;
-		for (i = 0; i < tableSize; i++) {
-			chip::app::Clusters::Binding::TableEntry iter_entry = gtableInstance.GetAt(i);
-			if ((iter_entry.fabricIndex == current_entry.fabricIndex) &&
-				(iter_entry.nodeId == current_entry.nodeId) &&
-				(iter_entry.remote == current_entry.remote) &&
-				(iter_entry.local == current_entry.local)) {
-				found = true;
-				break;
-			}
-		}
-		if (!found) {
-			ESP_LOGW(TAG, "Subscription for fabric %d, node 0x%llx, ep %d was removed. Cleaning up.", current_entry.fabricIndex, current_entry.nodeId, current_entry.remote);
-			SubscriptionManager::GetInstance().RemoveBinding(current_entry);
-		}
-
-		if (!found) {
-			ESP_LOGW(TAG, "Subscription for fabric %d, node 0x%llx, ep %d was removed. Cleaning up.", current_entry.fabricIndex, current_entry.nodeId, current_entry.remote);
-			SubscriptionManager::GetInstance().RemoveBinding(current_entry);
-		}
-	}
 	for (i = 0; i < tableSize; i++) {
 		// store the current entry on the stack.
 		chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
@@ -173,27 +145,13 @@ void handle_binding_changed_event() {
 			continue;
 		}
 
-		// check if we already have a subscription
-		if (SubscriptionManager::GetInstance().Find(bindingTableEntry) != nullptr) {
-			// we already have a subscription for this binding, skip it.
-			continue;
-		}
-
 		// all checks done. ask the manager to start a subscription.
-		esp_err_t rc = SubscriptionManager::GetInstance().AddBinding(bindingTableEntry);
+		esp_err_t rc = SubscriptionManager::GetInstance().AddBinding(bindingTableEntry, new_subs);
 		if (rc != ESP_OK) {
 			ESP_LOGE(TAG, "failed to add binding subscription");
 			continue;
 		}
 	}
 
-	// cleanup the removed entries.
-	std::vector<chip::app::Clusters::Binding::TableEntry> current_entries;
-	for (i = 0; i < tableSize; i++) {
-		current_entries.push_back(gtableInstance.GetAt(i));
-	}
-
-	std::vector<chip::app::Clusters::Binding::TableEntry> to_remove;
-	
+	SubscriptionManager::GetInstance().FinishAdditions(new_subs);
 }
-*/
