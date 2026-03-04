@@ -10,13 +10,27 @@ class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback 
 public:
     BooleanStateSubscriptionCallback() = default;
     ~BooleanStateSubscriptionCallback() override = default;
-    void OnReportBegin() override {}
-    void OnReportEnd() override {}
-    void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {}
-    void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {}
-    void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {}
-    void OnError(CHIP_ERROR aError) override {}
-    void OnDone(chip::app::ReadClient *apReadClient) override {}
+    void OnReportBegin() override {
+		ESP_LOGI(TAG, "SUBSCRIPTION REPORT BEGIN");
+	}
+    void OnReportEnd() override {
+		ESP_LOGI(TAG, "SUBSCRIPTION REPORT END");
+	}
+    void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+		ESP_LOGI(TAG, "SUBSCRIPTION ESTABLISHED");
+	}
+    void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
+		ESP_LOGI(TAG, "ATTRIBUTE UPDATE RECEIVED");
+	}
+    void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
+		ESP_LOGI(TAG, "EVENT UPDATE RECEIVED");
+	}
+    void OnError(CHIP_ERROR aError) override {
+		ESP_LOGE(TAG, "SUBSCRIPTION ERROR");
+	}
+    void OnDone(chip::app::ReadClient *apReadClient) override {
+		ESP_LOGI(TAG, "SUBSCRIPTION DONE");
+	}
 };
 
 uint64_t SubscriptionManagerV2::MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
