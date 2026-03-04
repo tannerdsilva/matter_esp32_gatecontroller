@@ -17,7 +17,7 @@
 #include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
 
-#include "bindings_core.h"
+#include "bindings_core_v2.h"
 #ifdef CONFIG_MODE_PRIMARY_CLOSURE
 #include "closure_control.h"
 #elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
@@ -138,6 +138,32 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGI(TAG, "bindings changed via cluster");
+		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
+
+		std::map<uint64_t, std::unique_ptr<SubscriptionV2>> new_subs;
+
+		size_t tableSize = gtableInstance.Size();
+		size_t i = 0;
+
+		
+		for (i = 0; i < tableSize; i++) {
+			// store the current entry on the stack.
+			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
+			/*
+			// validate that this endpoint has a cluster ID that is not null and that we support it.
+			if ((bindingTableEntry.clusterId != std::nullopt) && (bindingTableEntry.clusterId.value() != chip::app::Clusters::BooleanState::Id)) {
+				// not a cluster we can interact with, skip it.
+				continue;
+			}
+
+			// all checks done. ask the manager to start a subscription.
+			esp_err_t rc = SubscriptionManager::GetInstance().AddBinding(bindingTableEntry, new_subs);
+			if (rc != ESP_OK) {
+				ESP_LOGE(TAG, "failed to add binding subscription");
+				continue;
+			}
+			*/
+		}
 		break;
     }
     break;
@@ -201,6 +227,12 @@ extern "C" void app_main() {
 	endpoint_t *root_node_ep = endpoint::get_first(node);
 	cluster::binding::config_t bind_cfg;
 	cluster::binding::create(root_node_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
+
+	esp_matter::cluster::boolean_state::config_t bool_cfg {};
+	endpoint_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
+
+	ABORT_APP_ON_FAILURE(bool_cluster != nullptr, ESP_LOGE(TAG, "bool cluster create failed"));
+	uint16_t bool_ep_id = endpoint::get_id(bool_cluster);
 
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
 	ABORT_APP_ON_FAILURE(root_node_ep != nullptr, ESP_LOGE(TAG, "Failed to find root node endpoint"));

@@ -4,6 +4,22 @@
 
 const char *TAG = "BINDINGS_CORE";
 
+class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {
+	public:
+		BooleanStateSubscriptionCallback() = default;
+		~BooleanStateSubscriptionCallback() override = default;
+
+		void OnReportBegin() override {};
+		void OnReportEnd() override {};
+		void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+			// ESP_LOGI(TAG, "subscription established with id: " PRIu64, aSubscriptionId);
+		};
+		void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {};
+		void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {};
+		void OnError(CHIP_ERROR aError) override {};
+		void OnDone(chip::app::ReadClient * apReadClient) override {};
+};
+
 uint64_t SubscriptionManager::MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
 	return (static_cast<uint64_t>(fabric) << 56) | ((node & 0xFFFFFFFFFFFFULL) << 8) | (ep & 0xFFULL);
 }
@@ -127,31 +143,6 @@ esp_err_t SubscriptionManager::FinishAdditions(std::map<uint64_t, std::unique_pt
 	return ESP_OK;
 }
 
-void handle_binding_changed_event() {
-	chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
-
-	std::map<uint64_t, std::unique_ptr<Subscription>> new_subs;
-
-	size_t tableSize = gtableInstance.Size();
-	size_t i = 0;
-
-	for (i = 0; i < tableSize; i++) {
-		// store the current entry on the stack.
-		chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
-       
-		// validate that this endpoint has a cluster ID that is not null and that we support it.
-		if ((bindingTableEntry.clusterId != std::nullopt) && (bindingTableEntry.clusterId.value() != chip::app::Clusters::BooleanState::Id)) {
-			// not a cluster we can interact with, skip it.
-			continue;
-		}
-
-		// all checks done. ask the manager to start a subscription.
-		esp_err_t rc = SubscriptionManager::GetInstance().AddBinding(bindingTableEntry, new_subs);
-		if (rc != ESP_OK) {
-			ESP_LOGE(TAG, "failed to add binding subscription");
-			continue;
-		}
-	}
-
-	SubscriptionManager::GetInstance().FinishAdditions(new_subs);
+void myFooFunction() {
+	ESP_LOGI(TAG, "This is a function in the bindings core file.");
 }

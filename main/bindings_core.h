@@ -26,21 +26,7 @@ class SubscriptionManager {
 			static SubscriptionManager instance;
 			return instance;
 		}
-
-		class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {
-			public:
-				BooleanStateSubscriptionCallback() = default;
-				~BooleanStateSubscriptionCallback() override = default;
-
-				void OnReportBegin() override;
-				void OnReportEnd() override;
-				void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override;
-				void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override;
-				void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override;
-				void OnError(CHIP_ERROR aError) override;
-				void OnDone(chip::app::ReadClient * apReadClient) override;
-		};
-
+		
 		// install a binding into the subscription manager if it does not already exist. a graceful failure will occur (ESP_OK) if the binding already exists.
 		esp_err_t AddBinding(const chip::app::Clusters::Binding::TableEntry &entry, std::map<uint64_t, std::unique_ptr<Subscription>> &new_sub_assemble);
 		// called once after the entire table has been processed. any bindings that were not marked as "added" during the AddBinding phase will be removed during this phase.
@@ -73,5 +59,3 @@ class SubscriptionManager {
 		// aborts and deletes a subscription.
 		void AbortAndDelete(Subscription *sub);
 };
-
-void handle_binding_changed_event();
