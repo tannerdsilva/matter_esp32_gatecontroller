@@ -94,6 +94,7 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 }
 
 static uint16_t event_stage = 0;
+static SubscriptionManager subscription_manager;
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
@@ -140,29 +141,24 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		ESP_LOGI(TAG, "bindings changed via cluster");
 		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
 
-		std::map<uint64_t, std::unique_ptr<Subscription>> new_subs;
+		std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
 
 		size_t tableSize = gtableInstance.Size();
 		size_t i = 0;
-
 		
 		for (i = 0; i < tableSize; i++) {
 			// store the current entry on the stack.
 			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
-			/*
-			// validate that this endpoint has a cluster ID that is not null and that we support it.
-			if ((bindingTableEntry.clusterId != std::nullopt) && (bindingTableEntry.clusterId.value() != chip::app::Clusters::BooleanState::Id)) {
-				// not a cluster we can interact with, skip it.
-				continue;
-			}
 
-			// all checks done. ask the manager to start a subscription.
-			esp_err_t rc = SubscriptionManager::GetInstance().AddBinding(bindingTableEntry, new_subs);
+			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
 			if (rc != ESP_OK) {
 				ESP_LOGE(TAG, "failed to add binding subscription");
 				continue;
 			}
-			*/
+		}
+		esp_err_t rc = subscription_manager.FinishAdditions(new_subs);
+		if (rc != ESP_OK) {
+			ESP_LOGE(TAG, "failed to finish adding subscriptions");
 		}
 		break;
     }
