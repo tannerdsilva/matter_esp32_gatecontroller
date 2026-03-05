@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <mutex>
 
 #include <esp_log.h>
 #include <esp_matter_client.h>
@@ -16,22 +17,38 @@ struct SubscriptionV2 {
 	uint64_t remote_node_id;
 	uint8_t fabric_index;
 	chip::DeviceProxy *peer;
+	// remove the readclient if the sdk manages it internally (need to confirm)
 	std::unique_ptr<chip::app::ReadClient> read_client;
 };
 
+// key for map to handle 64-bit node ids safely
+struct BindingKey {
+	uint64_t node_id;
+	uint8_t fabric_index;
+	uint16_t remote_ep;
+	bool operator<(const BindingKey &other) const {
+		if (node_id != other.node_id) return node_id < other.node_id;
+		if (fabric_index != other.fabric_index) return fabric_index < other.fabric_index;
+		return remote_ep < other.remote_ep;
+	}
+};
+
+// alias for the map type
+using BindingMapKey = std::map<BindingKey, std::unique_ptr<SubscriptionV2>>;
 struct SubscriptionManagerV2 {
 	// map of active subscriptions
-	std::map<uint64_t, std::unique_ptr<SubscriptionV2>> m_subs;
+	BindingMapKey m_subs;
+	// mutex for thread safety
+	std::mutex m_mutex;
 
-	// add a binding; returns ESP_OK if already present
-    esp_err_t AddBinding(const chip::app::Clusters::Binding::TableEntry &entry, std::map<uint64_t, std::unique_ptr<SubscriptionV2>> &new_sub_assemble);
-    // finish update phase, removing stale subscriptions
-    esp_err_t FinishAdditions(std::map<uint64_t, std::unique_ptr<SubscriptionV2>> &new_sub_assemble);
+	// add a binding; returns ESP_OK if already present or new
+	esp_err_t AddBinding(const chip::app::Clusters::Binding::TableEntry &entry, std::map<BindingKey, std::unique_ptr<SubscriptionV2>> &new_sub_assemble);
 
-    // internal helpers (public for simplicity)
-    SubscriptionV2 *Find(const chip::app::Clusters::Binding::TableEntry &key);
-    uint64_t MakeKey(uint8_t fabric, uint64_t node, uint16_t ep);
-    void ReverseHash(uint64_t key, uint8_t &fabric, uint64_t &node, uint16_t &ep);
-    esp_err_t StartSubscription(SubscriptionV2 *sub);
-    void AbortAndDelete(SubscriptionV2 *sub);
+	// finish update phase, removing stale subscriptions
+	esp_err_t FinishAdditions(std::map<BindingKey, std::unique_ptr<SubscriptionV2>> &new_sub_assemble);
+
+	// internal helpers
+	SubscriptionV2 *Find(const chip::app::Clusters::Binding::TableEntry &key);
+	esp_err_t StartSubscription(SubscriptionV2 *sub);
+	void AbortAndDelete(SubscriptionV2 *sub);
 };

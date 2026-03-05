@@ -2,53 +2,68 @@
 #include <mutex>
 #include <vector>
 
-#include <vector>
-
 const char *TAG = "BINDINGS_CORE";
 
-class BooleanStateSubscriptionCallback : public chip::app::ReadClient::Callback {
-public:
-    BooleanStateSubscriptionCallback() = default;
-    ~BooleanStateSubscriptionCallback() override = default;
-    void OnReportBegin() override {
-		ESP_LOGI(TAG, "SUBSCRIPTION REPORT BEGIN");
-	}
-    void OnReportEnd() override {
-		ESP_LOGI(TAG, "SUBSCRIPTION REPORT END");
-	}
-    void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
-		ESP_LOGI(TAG, "SUBSCRIPTION ESTABLISHED");
-	}
-    void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
-		ESP_LOGI(TAG, "ATTRIBUTE UPDATE RECEIVED");
-	}
-    void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
-		ESP_LOGI(TAG, "EVENT UPDATE RECEIVED");
-	}
-    void OnError(CHIP_ERROR aError) override {
-		ESP_LOGE(TAG, "SUBSCRIPTION ERROR");
-	}
-    void OnDone(chip::app::ReadClient *apReadClient) override {
-		ESP_LOGI(TAG, "SUBSCRIPTION DONE");
+// mutex to protect shared map access
+std::mutex s_mutex;
+
+// key structure to safely store 64-bit node id
+struct BindingKey {
+	uint64_t node_id;
+	uint8_t fabric_index;
+	uint16_t remote_ep;
+	bool operator < (const BindingKey &other) const {
+		if (node_id != other.node_id) return node_id < other.node_id;
+		if (fabric_index != other.fabric_index) return fabric_index < other.fabric_index;
+		return remote_ep < other.remote_ep;
 	}
 };
 
-uint64_t SubscriptionManagerV2::MakeKey(uint8_t fabric, uint64_t node, uint16_t ep) {
-    return (static_cast<uint64_t>(fabric) << 56) | ((node & 0xFFFFFFFFFFFFULL) << 8) | (ep & 0xFFULL);
+// callback class for handling subscription events
+class SubscriptionCallback : public chip::app::ReadClient::Callback {
+public:
+    void OnReportBegin() override {
+        ESP_LOGI(TAG, "SUBSCRIPTION REPORT BEGIN");
+    }
+    void OnReportEnd() override {
+        ESP_LOGI(TAG, "SUBSCRIPTION REPORT END");
+    }
+    void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+        ESP_LOGI(TAG, "SUBSCRIPTION ESTABLISHED");
+    }
+    void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
+        ESP_LOGI(TAG, "ATTRIBUTE UPDATE RECEIVED");
+    }
+    void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
+        ESP_LOGI(TAG, "EVENT UPDATE RECEIVED");
+    }
+    void OnError(CHIP_ERROR aError) override {
+        ESP_LOGE(TAG, "SUBSCRIPTION ERROR: %d", aError);
+    }
+    void OnDone(chip::app::ReadClient *apReadClient) override {
+        ESP_LOGI(TAG, "SUBSCRIPTION DONE");
+    }
+};
+
+// helper to create a unique key from binding entry
+static BindingKey MakeKey(const chip::app::Clusters::Binding::TableEntry &entry) {
+    return BindingKey{entry.nodeId, entry.fabricIndex, entry.remote};
 }
 
-void SubscriptionManagerV2::ReverseHash(uint64_t key, uint8_t &fabric, uint64_t &node, uint16_t &ep) {
-    fabric = (key >> 56) & 0xFF;
-    node   = (key >> 8) & 0xFFFFFFFFFFFFULL;
-    ep     = key & 0xFF;
+// helper to create a key from node id and endpoint
+static BindingKey MakeKey(uint64_t node, uint8_t fabric, uint16_t ep) {
+    return BindingKey{node, fabric, ep};
 }
 
+// find existing subscription by key
 SubscriptionV2 *SubscriptionManagerV2::Find(const chip::app::Clusters::Binding::TableEntry &key) {
-    uint64_t map_key = MakeKey(key.fabricIndex, key.nodeId, key.remote);
-    auto it = m_subs.find(map_key);
+    std::lock_guard<std::mutex> lock(s_mutex);
+    BindingMapKey m_key = MakeKey(key);
+    auto it = m_subs.find(m_key);
     return (it != m_subs.end()) ? it->second.get() : nullptr;
 }
 
+// start a new subscription on the remote peer
 esp_err_t SubscriptionManagerV2::StartSubscription(SubscriptionV2 *sub) {
     chip::app::AttributePathParams attr_path;
     attr_path.mEndpointId   = sub->remote_ep;
@@ -65,15 +80,9 @@ esp_err_t SubscriptionManagerV2::StartSubscription(SubscriptionV2 *sub) {
                       esp_matter::client::request_handle_t *req_handle,
                       void *priv_data) {
         SubscriptionV2 *sub = static_cast<SubscriptionV2 *>(priv_data);
-        ESP_LOGE(TAG, "CASE session established...performing validation READ.");
-        auto *cb = new BooleanStateSubscriptionCallback();
+        auto *cb = new SubscriptionCallback();
         esp_err_t rc = esp_matter::client::interaction::read::send_request(
-            peer,
-            &req_handle->attribute_path,
-            1,
-            nullptr,
-            0,
-            *cb);
+            peer, &req_handle->attribute_path, 1, nullptr, 0, *cb);
         if (rc != ESP_OK) {
             ESP_LOGE(TAG, "failed to send read request: %d", rc);
             delete cb;
@@ -99,16 +108,18 @@ esp_err_t SubscriptionManagerV2::StartSubscription(SubscriptionV2 *sub) {
     return rc;
 }
 
+// add a binding to the pending list
 esp_err_t SubscriptionManagerV2::AddBinding(
     const chip::app::Clusters::Binding::TableEntry &entry,
-    std::map<uint64_t, std::unique_ptr<SubscriptionV2>> &new_sub_assemble) {
-    uint64_t key = MakeKey(entry.fabricIndex, entry.nodeId, entry.remote);
+    std::map<BindingKey, std::unique_ptr<SubscriptionV2>> &new_sub_assemble) {
+    BindingKey key = MakeKey(entry);
 
-    auto it_old = m_subs.find(key);
-    if (it_old != m_subs.end()) {
-        new_sub_assemble[key] = std::move(it_old->second);
-        m_subs.erase(it_old);
-        return ESP_OK;
+    // check if subscription already exists in current active list
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (m_subs.find(key) != m_subs.end()) {
+            return ESP_OK; // skip, already active
+        }
     }
 
     auto sub = std::make_unique<SubscriptionV2>();
@@ -117,22 +128,46 @@ esp_err_t SubscriptionManagerV2::AddBinding(
     sub->remote_ep      = entry.remote;
     sub->local_ep       = entry.local;
 
-    SubscriptionV2 *sub_ptr = sub.get();
     new_sub_assemble[key] = std::move(sub);
-
-    esp_err_t rc = StartSubscription(sub_ptr);
-    if (rc != ESP_OK) {
-        new_sub_assemble.erase(key);
-    }
     return ESP_OK;
 }
 
+// finish the update phase and remove stale subscriptions
 esp_err_t SubscriptionManagerV2::FinishAdditions(
-    std::map<uint64_t, std::unique_ptr<SubscriptionV2>> &new_sub_assemble) {
-    for (auto &kv : m_subs) {
-        AbortAndDelete(kv.second.get());
+    std::map<BindingKey, std::unique_ptr<SubscriptionV2>> &new_sub_assemble) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+
+    // iterate old subscriptions to find removed ones
+    for (auto it = m_subs.begin(); it != m_subs.end(); ) {
+        // if key is not in new list, abort and remove
+        if (new_sub_assemble.find(it->first) == new_sub_assemble.end()) {
+            AbortAndDelete(it->second.get());
+            it = m_subs.erase(it);
+        } else {
+            ++it; // keep existing active subscription
+        }
     }
-    m_subs.clear();
-    m_subs.swap(new_sub_assemble);
+
+    // add new subscriptions and start them
+    for (auto &kv : new_sub_assemble) {
+        esp_err_t rc = StartSubscription(kv.second.get());
+        if (rc != ESP_OK) {
+            // failed to start, clean up local map entry
+            AbortAndDelete(kv.second.get());
+            m_subs.erase(kv.first);
+        } else {
+            // successfully started, move to active map
+            m_subs[kv.first] = std::move(kv.second);
+        }
+    }
+
     return ESP_OK;
+}
+
+// cleanup and delete a specific subscription
+void SubscriptionManagerV2::AbortAndDelete(SubscriptionV2 *sub) {
+    if (!sub) return;
+    // abort read client if available (implementation depends on sdk)
+    // delete the subscription struct
+    delete sub;
 }
