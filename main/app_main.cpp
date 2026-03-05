@@ -140,7 +140,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		ESP_LOGI(TAG, "bindings changed via cluster");
 		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
 
-		std::map<uint64_t, std::unique_ptr<SubscriptionV2>> new_subs;
+		std::map<uint64_t, std::unique_ptr<Subscription>> new_subs;
 
 		size_t tableSize = gtableInstance.Size();
 		size_t i = 0;
