@@ -49,7 +49,7 @@ static BindingKey MakeKey(uint64_t node, uint8_t fabric, uint16_t ep) {
 }
 
 // start a new subscription on the remote peer
-esp_err_t SubscriptionManager::StartSubscription(SubscriptionV2 *sub) {
+esp_err_t SubscriptionManager::StartSubscription(Subscription *sub) {
 	chip::app::AttributePathParams attr_path;
 	attr_path.mEndpointId = sub->remote_ep;
 	attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
@@ -61,28 +61,14 @@ esp_err_t SubscriptionManager::StartSubscription(SubscriptionV2 *sub) {
 	req.attribute_path = attr_path;
 	req.request_data = nullptr;
 
-	auto once_cb = [](esp_matter::client::peer_device_t *peer,
-					  esp_matter::client::request_handle_t *req_handle,
-					  void *priv_data) {
-		SubscriptionV2 *sub = static_cast<SubscriptionV2 *>(priv_data);
+	auto once_cb = [](esp_matter::client::peer_device_t *peer, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
 		auto *cb = new SubscriptionCallback();
-		esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(
-			peer,
-			&req_handle->attribute_path,
-			1,
-			nullptr,
-			0,
-			0,
-			1000,
-			true,
-			true,
-			*cb);
+		esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(peer, &req_handle->attribute_path, 1, nullptr, 0, 0, 1000, true, true, *cb);
 		if (rc != ESP_OK) {
 			ESP_LOGE(TAG, "failed to send subscribe request: %d", rc);
 			delete cb;
 			return;
 		}
-		sub->callback.reset(cb);
 	};
 
 	esp_err_t rc = esp_matter::client::set_request_callback(once_cb, nullptr, sub);
