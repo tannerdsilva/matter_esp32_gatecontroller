@@ -50,38 +50,57 @@ static BindingKey MakeKey(uint64_t node, uint8_t fabric, uint16_t ep) {
 
 // start a new subscription on the remote peer
 esp_err_t SubscriptionManager::StartSubscription(SubscriptionV2 *sub) {
-    // define attribute path for subscription
-    chip::app::ConcreteAttributePath attr_path;
-    attr_path.mEndpointId = sub->remote_ep;
-    attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
-    attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
+	chip::app::AttributePathParams attr_path;
+	attr_path.mEndpointId = sub->remote_ep;
+	attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
+	attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
+	attr_path.mListIndex = 0;
 
-    // create subscription request
-    esp_matter::client::subscription::request_handle_t req{};
-    req.type = esp_matter::client::SUBSCRIBE_ATTR;
-    req.subscription_attrs = &attr_path;
-    req.subscription_attrs_count = 1;
-    req.request_data = nullptr;
+	esp_matter::client::request_handle_t req{};
+	req.type = esp_matter::client::SUBSCRIBE_ATTR;
+	req.attribute_path = attr_path;
+	req.request_data = nullptr;
 
-    // callback to handle subscription events
-    auto *cb = new SubscriptionCallback();
+	auto once_cb = [](esp_matter::client::peer_device_t *peer,
+					  esp_matter::client::request_handle_t *req_handle,
+					  void *priv_data) {
+		SubscriptionV2 *sub = static_cast<SubscriptionV2 *>(priv_data);
+		auto *cb = new SubscriptionCallback();
+		esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(
+			peer,
+			&req_handle->attribute_path,
+			1,
+			nullptr,
+			0,
+			0,
+			1000,
+			true,
+			true,
+			*cb);
+		if (rc != ESP_OK) {
+			ESP_LOGE(TAG, "failed to send subscribe request: %d", rc);
+			delete cb;
+			return;
+		}
+		sub->callback.reset(cb);
+	};
 
-    // establish subscription
-    esp_err_t rc = esp_matter::client::subscription::send(
-        chip::Server::GetInstance().GetCASESessionManager(),
-        sub->fabric_index,
-        sub->remote_node_id,
-        &req,
-        *cb);
+	esp_err_t rc = esp_matter::client::set_request_callback(once_cb, nullptr, sub);
+	if (rc != ESP_OK) {
+		ESP_LOGE(TAG, "failed to set client callback: %d", rc);
+		return rc;
+	}
 
-    if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "failed to send subscription request: %d", rc);
-        delete cb;
-    } else {
-        ESP_LOGI(TAG, "subscription started for node 0x%016ll", sub->remote_node_id);
-    }
-
-    return rc;
+	rc = esp_matter::client::connect(
+		chip::Server::GetInstance().GetCASESessionManager(),
+		sub->fabric_index,
+		sub->remote_node_id,
+		&req);
+	if (rc != ESP_OK) {
+		ESP_LOGE(TAG, "failed to connect to peer: %d", rc);
+		esp_matter::client::set_request_callback(nullptr, nullptr, nullptr);
+	}
+	return rc;
 }
 
 // add a binding to the pending list
