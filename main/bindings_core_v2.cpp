@@ -51,28 +51,24 @@ static BindingKey MakeKey(uint64_t node, uint8_t fabric, uint16_t ep) {
 
 // start a new subscription on the remote peer
 esp_err_t SubscriptionManager::StartSubscription(Subscription *sub) {
-    // 1. Create a fresh callback for this subscription
     auto *cb = new SubscriptionCallback();
 
-    // 2. Construct the attribute path for BooleanState StateValue
-    chip::app::AttributePathParams attr_path;
+	chip::app::AttributePathParams attr_path;
     attr_path.mEndpointId = sub->remote_ep;
     attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
     attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
     attr_path.mListIndex = 0;
 
-    // 3. Call the interaction model subscribe API directly
-    // This bypasses the broken esp_matter::client::set_request_callback path
-    esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(
+	esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(
         sub->peer,
         &attr_path,
-        1, // attr_path_size
-        nullptr, // event_path
-        0, // event_path_size
-        0, // min_interval
-        1000, // max_interval
-        true, // keep_subscription
-        true, // auto_resubscribe
+        1,
+        nullptr,
+        0,
+        0,
+        1000,
+        true,
+        true,
         *cb
     );
 
@@ -86,9 +82,7 @@ esp_err_t SubscriptionManager::StartSubscription(Subscription *sub) {
 }
 
 // add a binding to the pending list
-esp_err_t SubscriptionManager::AddBinding(
-    const chip::app::Clusters::Binding::TableEntry &entry,
-    std::map<BindingKey, std::unique_ptr<Subscription>> &new_sub_assemble) {
+esp_err_t SubscriptionManager::AddBinding(const chip::app::Clusters::Binding::TableEntry &entry, std::map<BindingKey, std::unique_ptr<Subscription>> &new_sub_assemble) {
     BindingKey key = MakeKey(entry);
 
     // check if subscription already exists in current active list
