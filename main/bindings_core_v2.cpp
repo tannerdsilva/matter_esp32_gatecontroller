@@ -1,6 +1,7 @@
 #include "bindings_core_v2.h"
 #include <mutex>
 #include <vector>
+#include <app/server/Server.h>
 
 const char *TAG = "BINDINGS_CORE";
 
@@ -10,83 +11,78 @@ std::mutex s_mutex;
 // callback class for handling subscription events
 class SubscriptionCallback : public chip::app::ReadClient::Callback {
 public:
-	void OnReportBegin() override {
-		ESP_LOGI(TAG, "SUBSCRIPTION REPORT BEGIN");
-	}
-	void OnReportEnd() override {
-		ESP_LOGI(TAG, "SUBSCRIPTION REPORT END");
-	}
-	void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
-		ESP_LOGI(TAG, "SUBSCRIPTION ESTABLISHED");
-	}
-	void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
-		ESP_LOGI(TAG, "ATTRIBUTE UPDATE RECEIVED");
-	}
-	void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
-		ESP_LOGI(TAG, "EVENT UPDATE RECEIVED");
-	}
-	void OnError(CHIP_ERROR aError) override {
-		ESP_LOGE(TAG, "SUBSCRIPTION ERROR");
-	}
-	void OnDone(chip::app::ReadClient *apReadClient) override {
-		ESP_LOGI(TAG, "SUBSCRIPTION DONE");
-	}
+    void OnReportBegin() override {
+        ESP_LOGI("BINDINGS_CORE", "SUBSCRIPTION REPORT BEGIN");
+    }
+    void OnReportEnd() override {
+        ESP_LOGI("BINDINGS_CORE", "SUBSCRIPTION REPORT END");
+    }
+    void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
+        ESP_LOGI("BINDINGS_CORE", "ATTRIBUTE UPDATE RECEIVED");
+    }
+    void OnEventData(const chip::app::EventHeader &aEventHeader, chip::TLV::TLVReader *apData, const chip::app::StatusIB *aStatus) override {
+        ESP_LOGI("BINDINGS_CORE", "EVENT UPDATE RECEIVED");
+    }
+    void OnError(CHIP_ERROR aError) override {
+        ESP_LOGE("BINDINGS_CORE", "SUBSCRIPTION ERROR");
+    }
+    void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+        ESP_LOGI("BINDINGS_CORE", "SUBSCRIPTION ESTABLISHED");
+    }
+    void OnDone(chip::app::ReadClient *apReadClient) override {
+        ESP_LOGI("BINDINGS_CORE", "SUBSCRIPTION TERMINATED");
+    }
 };
 
 // helper to create a unique key from binding entry
 static BindingKey MakeKey(const chip::app::Clusters::Binding::TableEntry &entry) {
-	BindingKey newKey = {
-		.node_id = entry.nodeId,
-		.fabric_index = entry.fabricIndex,
-		.remote_ep = entry.remote
-	};
-	return newKey;
+    BindingKey newKey = {
+        .node_id = entry.nodeId,
+        .fabric_index = entry.fabricIndex,
+        .remote_ep = entry.remote
+    };
+    return newKey;
 }
 
 // helper to create a key from node id and endpoint
 static BindingKey MakeKey(uint64_t node, uint8_t fabric, uint16_t ep) {
-	return BindingKey{node, fabric, ep};
+    return BindingKey{node, fabric, ep};
 }
 
 // start a new subscription on the remote peer
 esp_err_t SubscriptionManager::StartSubscription(Subscription *sub) {
-	chip::app::AttributePathParams attr_path;
-	attr_path.mEndpointId = sub->remote_ep;
-	attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
-	attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
-	attr_path.mListIndex = 0;
+    // 1. Create a fresh callback for this subscription
+    auto *cb = new SubscriptionCallback();
 
-	esp_matter::client::request_handle_t req{};
-	req.type = esp_matter::client::SUBSCRIBE_ATTR;
-	req.attribute_path = attr_path;
-	req.request_data = nullptr;
+    // 2. Construct the attribute path for BooleanState StateValue
+    chip::app::AttributePathParams attr_path;
+    attr_path.mEndpointId = sub->remote_ep;
+    attr_path.mClusterId = chip::app::Clusters::BooleanState::Id;
+    attr_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
+    attr_path.mListIndex = 0;
 
-	auto once_cb = [](esp_matter::client::peer_device_t *peer, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
-		auto *cb = new SubscriptionCallback();
-		esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(peer, &req_handle->attribute_path, 1, nullptr, 0, 0, 1000, true, true, *cb);
-		if (rc != ESP_OK) {
-			ESP_LOGE(TAG, "failed to send subscribe request: %d", rc);
-			delete cb;
-			return;
-		}
-	};
+    // 3. Call the interaction model subscribe API directly
+    // This bypasses the broken esp_matter::client::set_request_callback path
+    esp_err_t rc = esp_matter::client::interaction::subscribe::send_request(
+        sub->peer,
+        &attr_path,
+        1, // attr_path_size
+        nullptr, // event_path
+        0, // event_path_size
+        0, // min_interval
+        1000, // max_interval
+        true, // keep_subscription
+        true, // auto_resubscribe
+        *cb
+    );
 
-	esp_err_t rc = esp_matter::client::set_request_callback(once_cb, nullptr, sub);
-	if (rc != ESP_OK) {
-		ESP_LOGE(TAG, "failed to set client callback: %d", rc);
-		return rc;
-	}
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "failed to send subscribe request: %d", rc);
+        // Clean up the callback if request failed
+        delete cb; 
+    }
 
-	rc = esp_matter::client::connect(
-		chip::Server::GetInstance().GetCASESessionManager(),
-		sub->fabric_index,
-		sub->remote_node_id,
-		&req);
-	if (rc != ESP_OK) {
-		ESP_LOGE(TAG, "failed to connect to peer: %d", rc);
-		esp_matter::client::set_request_callback(nullptr, nullptr, nullptr);
-	}
-	return rc;
+    return rc;
 }
 
 // add a binding to the pending list
@@ -108,6 +104,7 @@ esp_err_t SubscriptionManager::AddBinding(
     sub->remote_node_id = entry.nodeId;
     sub->remote_ep      = entry.remote;
     sub->local_ep       = entry.local;
+    sub->peer           = nullptr; // Will be set by StartSubscription
 
     new_sub_assemble[key] = std::move(sub);
     return ESP_OK;
@@ -148,7 +145,6 @@ esp_err_t SubscriptionManager::FinishAdditions(
 // cleanup and delete a specific subscription
 void SubscriptionManager::AbortAndDelete(Subscription *sub) {
     if (!sub) return;
-    // abort read client if available (implementation depends on sdk)
-    // delete the subscription struct
+    // Delete the subscription struct
     delete sub;
 }

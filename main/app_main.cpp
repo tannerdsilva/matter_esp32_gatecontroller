@@ -1,9 +1,9 @@
 /*
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
+This example code is in the Public Domain (or CC0 licensed, at your option.)
 
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
+Unless required by applicable law or agreed to in writing, this
+software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied.
 */
 
 #include <esp_err.h>
@@ -96,7 +96,9 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 static uint16_t event_stage = 0;
 static SubscriptionManager subscription_manager;
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
-    switch (event->Type) {
+	size_t tableSize;
+	size_t i = 0;
+	switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
 		ESP_LOGI(TAG, "interface IP Address Changed");
 		break;
@@ -171,14 +173,26 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 }
 
 static esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id, uint8_t effect_variant, void *priv_data) {
-    ESP_LOGI(TAG, "identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
-    return ESP_OK;
+	ESP_LOGI(TAG, "identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
+	return ESP_OK;
 }
 
 static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data) {
 	ESP_LOGI(TAG, "attribute updated: endpoint_id=%d", endpoint_id);
-    return ESP_OK;
+	return ESP_OK;
 }
+
+static esp_err_t app_binding_callback(const chip::app::Clusters::Binding::TableEntry &binding_entry, void *context) {
+	// uint16_t target_endpoint = binding_entry.endpointId;
+	// uint32_t cluster_id = binding_entry.clusterId;
+	// if (cluster_id == chip::app::Clusters::BooleanState::Id) {
+	//     ESP_LOGI(TAG, "BooleanState cluster bound to endpoint %d", target_endpoint);
+	//     // Add subscription or trigger custom logic
+	// }
+	ESP_LOGI(TAG, "BINDING CALLBACK");
+	return ESP_OK;
+}
+
 
 extern "C" void app_main() {
 	esp_err_t err = ESP_OK;
@@ -241,63 +255,6 @@ extern "C" void app_main() {
 	cluster::time_synchronization::feature::time_zone::add(time_sync_cluster, &tz_cfg);
 	#endif
 
-	/*
-	window_covering_device::config_t window_covering_device_config(static_cast<uint8_t>(chip::app::Clusters::WindowCovering::EndProductType::kUnknown));
-	window_covering_device_config.window_covering.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift;
-	window_covering_device_config.window_covering.type = (uint8_t)chip::app::Clusters::WindowCovering::Type::kUnknown;
-	window_covering_device_config.window_covering.config_status = 0x01;
-	window_covering_device_config.window_covering.operational_status = 0x00;
-	window_covering_device_config.window_covering.mode = 0x00;
-	window_covering_device_config.window_covering.delegate = &window_covering_manager;
-	endpoint_t *endpoint = window_covering_device::create(node, &window_covering_device_config, ENDPOINT_FLAG_NONE, NULL);
-	cover_set_endpoint_id(endpoint::get_id(endpoint));
-	cluster_t *windowCoveringCluser = cluster::window_covering::create(endpoint, &window_covering_device_config.window_covering, MATTER_CLUSTER_FLAG_INIT_FUNCTION | MATTER_CLUSTER_FLAG_SERVER);
-	
-	// create the up/open command
-	command_t *upOrOpenCommand = cluster::window_covering::command::create_up_or_open(windowCoveringCluser);
-	command::set_user_callback(upOrOpenCommand, override_cmd_handler);
-
-	// create the down/close command
-	command_t *downOrCloseCommand = cluster::window_covering::command::create_down_or_close(windowCoveringCluser);
-	command::set_user_callback(downOrCloseCommand, override_cmd_handler);
-
-	// create the stop command
-	command_t *stopCommand = cluster::window_covering::command::create_stop_motion(windowCoveringCluser);
-	command::set_user_callback(stopCommand, override_cmd_handler);
-
-	// create the mandatory attributes for the window covering cluster.
-	cover_currentPositionLiftPercent100ths = cluster::window_covering::attribute::create_target_position_lift_percent_100ths(windowCoveringCluser, 0);
-	cover_targetPositionLiftPercent100ths = cluster::window_covering::attribute::create_target_position_lift_percent_100ths(windowCoveringCluser, 0);
-	cover_operationalStatus = cluster::window_covering::attribute::create_operational_status(windowCoveringCluser, 0);
-	cover_configStatus = cluster::window_covering::attribute::create_config_status(windowCoveringCluser, 0);
-	cover_mode = cluster::window_covering::attribute::create_mode(windowCoveringCluser, 0);
-
-	// 
-	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-	esp_matter::endpoint::contact_sensor::config_t contact_sensor_config = {};
-	endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, &contact_sensor_config, CLUSTER_FLAG_SERVER, NULL);
-
-	esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
-        root_ep,
-        chip::app::Clusters::BooleanState::Id,
-        NULL);
-
-	if (!bool_srv) {
-		ESP_LOGE(TAG, "Failed to create boolean state cluster");
-		return;
-	}
-
-	// add the required attribute for the boolean state cluster
-	attribute_t *state_attr = cluster::boolean_state::attribute::create_state_value(bool_srv, false);
-
-	if (!state_attr) {
-		ESP_LOGE(TAG, "Failed to create state value attribute");
-		return;
-	}
-	*/
-	// endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, NULL, CLUSTER_FLAG_SERVER, NULL);
-	// #endif
-
 	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
@@ -313,7 +270,7 @@ extern "C" void app_main() {
 #if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
 	esp_matter::set_custom_commissionable_data_provider(&g_dynamic_passcode_provider);
 #endif
-
+	esp_matter::client::binding_manager_init();
 	err = esp_matter::start(app_event_cb, NULL);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to start Matter, err:%d", err));
 }
