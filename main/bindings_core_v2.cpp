@@ -73,6 +73,8 @@ esp_err_t SubscriptionManager::StartSubscription(Subscription *sub) {
 		return ESP_ERR_INVALID_ARG;
 	}
 	chip::CASESessionManager *case_mgr = chip::Server::GetInstance().GetCASESessionManager();
+    esp_matter::client::request_handle_t req;
+    req.type = esp_matter::client::READ_ATTR;
 	esp_err_t rc = esp_matter::client::connect(
 		case_mgr,
 		sub->fabric_index,

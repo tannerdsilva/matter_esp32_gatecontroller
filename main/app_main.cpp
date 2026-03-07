@@ -95,82 +95,171 @@ static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, T
 
 static uint16_t event_stage = 0;
 static SubscriptionManager subscription_manager;
-static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
-	size_t tableSize;
+static void binding_table_iterate() {
+	chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
+	std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
+	size_t tableSize = gtableInstance.Size();
 	size_t i = 0;
-	switch (event->Type) {
-	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
-		ESP_LOGI(TAG, "interface IP Address Changed");
-		break;
+	ESP_LOGE(TAG, "ITERATING BINDING TABLE, size=%i", tableSize);
+	for (i = 0; i < tableSize; i++) {
+		// store the current entry on the stack.
+		chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
 
-	case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
-		ESP_LOGI(TAG, "commissioning complete");
-		event_stage = 2;
-		led_indicator_set_color(&led_indicator_subsystem, 0, 255, 0); // green
-		break;
-
-	case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
-		ESP_LOGI(TAG, "commissioning failed, fail safe timer expired");
-		break;
-
-	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
-		ESP_LOGI(TAG, "commissioning session started");
-		event_stage = 1;
-		led_indicator_set_color(&led_indicator_subsystem, 0, 16, 16); // dim blue
-		break;
-
-	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
-		ESP_LOGI(TAG, "commissioning session stopped");
-		break;
-
-	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
-		ESP_LOGI(TAG, "commissioning window opened");
-		event_stage = 0;
-		led_indicator_set_color(&led_indicator_subsystem, 0, 0, 128); // blue
-		break;
-
-	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
-		ESP_LOGI(TAG, "commissioning window closed");
-		if (event_stage == 0) {
-			led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
-		}
-		break;
-	case chip::DeviceLayer::DeviceEventType::kServerReady:
-		ESP_LOGI(TAG, "server ready");
-		break;
-
-	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
-		ESP_LOGI(TAG, "bindings changed via cluster");
-		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
-
-		std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
-
-		size_t tableSize = gtableInstance.Size();
-		size_t i = 0;
-		
-		for (i = 0; i < tableSize; i++) {
-			// store the current entry on the stack.
-			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
-
-			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
-			if (rc != ESP_OK) {
-				ESP_LOGE(TAG, "failed to add binding subscription");
-				continue;
-			}
-		}
-		esp_err_t rc = subscription_manager.FinishAdditions(new_subs);
+		esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
 		if (rc != ESP_OK) {
-			ESP_LOGE(TAG, "failed to finish adding subscriptions");
+			ESP_LOGE(TAG, "failed to add binding subscription");
+			continue;
 		}
-		break;
-    }
-    break;
+	}
+	esp_err_t rc = subscription_manager.FinishAdditions(new_subs);
+	if (rc != ESP_OK) {
+		ESP_LOGE(TAG, "failed to finish adding subscriptions");
+	}
 
-    default:
-        ESP_LOGI(TAG, "unhandled event %d", static_cast<int>(event->Type));
-        break;
-    }
 }
+
+static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
+	switch (event->Type) {
+		// --- Existing Logic (Preserved) ---
+		case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
+			ESP_LOGE(TAG, "interface IP Address Changed");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
+			ESP_LOGE(TAG, "commissioning complete");
+			event_stage = 2;
+			led_indicator_set_color(&led_indicator_subsystem, 0, 255, 0); // green
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
+			ESP_LOGE(TAG, "commissioning failed, fail safe timer expired");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
+			ESP_LOGE(TAG, "commissioning session started");
+			event_stage = 1;
+			led_indicator_set_color(&led_indicator_subsystem, 0, 16, 16); // dim blue
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
+			ESP_LOGE(TAG, "commissioning session stopped");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
+			ESP_LOGE(TAG, "commissioning window opened");
+			event_stage = 0;
+			led_indicator_set_color(&led_indicator_subsystem, 0, 0, 128); // blue
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
+			ESP_LOGE(TAG, "commissioning window closed");
+			if (event_stage == 0) {
+				led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
+			}
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kServerReady:
+			ESP_LOGE(TAG, "server ready");
+			led_indicator_delta_color(&led_indicator_subsystem, 16, 0, 0); // brighten blue
+			binding_table_iterate();
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster:
+			ESP_LOGE(TAG, "bindings changed via cluster");
+			binding_table_iterate();
+			break;
+
+		// --- Pasted PublicEventTypes (New/Expanded) ---
+		case chip::DeviceLayer::DeviceEventType::kWiFiConnectivityChange:
+			ESP_LOGE(TAG, "WiFi Connectivity Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kThreadConnectivityChange:
+			ESP_LOGE(TAG, "Thread Connectivity Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kInternetConnectivityChange:
+			ESP_LOGE(TAG, "Internet Connectivity Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kServiceConnectivityChange:
+			ESP_LOGE(TAG, "Service Connectivity Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kServiceProvisioningChange:
+			ESP_LOGE(TAG, "Service Provisioning Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kTimeSyncChange:
+			ESP_LOGE(TAG, "Time Sync Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionEstablished:
+			ESP_LOGE(TAG, "CHIPoBLE Connection Established");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCHIPoBLEConnectionClosed:
+			ESP_LOGE(TAG, "CHIPoBLE Connection Closed");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCloseAllBleConnections:
+			ESP_LOGE(TAG, "Close All BLE Connections");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kWiFiDeviceAvailable:
+			ESP_LOGE(TAG, "WiFi Device Available");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kOperationalNetworkStarted:
+			ESP_LOGE(TAG, "Operational Network Started");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kThreadStateChange:
+			ESP_LOGE(TAG, "Thread State Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kThreadInterfaceStateChange:
+			ESP_LOGE(TAG, "Thread Interface State Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kCHIPoBLEAdvertisingChange:
+			ESP_LOGE(TAG, "CHIPoBLE Advertising Change");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kOperationalNetworkEnabled:
+			ESP_LOGE(TAG, "Operational Network Enabled");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kDnssdInitialized:
+			ESP_LOGE(TAG, "DNS-SD Initialized");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kDnssdRestartNeeded:
+			ESP_LOGE(TAG, "DNS-SD Restart Needed");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kOtaStateChanged:
+			ESP_LOGE(TAG, "OTA State Changed");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kBLEDeinitialized:
+			ESP_LOGE(TAG, "BLE Deinitialized");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kSecureSessionEstablished:
+			ESP_LOGE(TAG, "Secure Session Established");
+			break;
+
+		case chip::DeviceLayer::DeviceEventType::kFactoryReset:
+			ESP_LOGE(TAG, "Factory Reset Started");
+			break;
+
+		default:
+			ESP_LOGE(TAG, "Unhandled Event Type: %d", event->Type);
+			break;
+	}
+}
+
 
 static esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id, uint8_t effect_variant, void *priv_data) {
 	ESP_LOGI(TAG, "identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
