@@ -142,16 +142,11 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGI(TAG, "bindings changed via cluster");
 		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
-
 		std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
-
 		size_t tableSize = gtableInstance.Size();
 		size_t i = 0;
-		
 		for (i = 0; i < tableSize; i++) {
-			// store the current entry on the stack.
 			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
-
 			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
 			if (rc != ESP_OK) {
 				ESP_LOGE(TAG, "failed to add binding subscription");
@@ -165,7 +160,6 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		break;
     }
     break;
-
     default:
         ESP_LOGI(TAG, "unhandled event %d", static_cast<int>(event->Type));
         break;
@@ -183,18 +177,13 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
 }
 
 static esp_err_t app_binding_callback(const chip::app::Clusters::Binding::TableEntry &binding_entry, void *context) {
-	// uint16_t target_endpoint = binding_entry.endpointId;
-	// uint32_t cluster_id = binding_entry.clusterId;
-	// if (cluster_id == chip::app::Clusters::BooleanState::Id) {
-	//     ESP_LOGI(TAG, "BooleanState cluster bound to endpoint %d", target_endpoint);
-	//     // Add subscription or trigger custom logic
-	// }
 	ESP_LOGI(TAG, "BINDING CALLBACK");
 	return ESP_OK;
 }
 
 
 extern "C" void app_main() {
+	// nvs initialization.
 	esp_err_t err = ESP_OK;
 	err = nvs_flash_init();
 	if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -205,10 +194,12 @@ extern "C" void app_main() {
 	ESP_ERROR_CHECK(err);
 	ESP_LOGI(TAG, "NVS init OK – ready for Matter");
 
+	// initialize the led indicator subsystem
 	app_driver_handle_t switch_handle = app_driver_switch_init();
 	app_reset_button_register(switch_handle);
 	led_indicator_init(&led_indicator_subsystem, LED_GPIO);
 
+	// create the root Matter node and endpoint, and add clusters to it.
 	node::config_t node_config;
 	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
@@ -235,11 +226,12 @@ extern "C" void app_main() {
 
 	// the root endpoint of the data model.
 	endpoint_t *root_node_ep = endpoint::get_first(node);
-	cluster::binding::config_t bind_cfg;
-	cluster::binding::create(root_node_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 
 	esp_matter::cluster::boolean_state::config_t bool_cfg {};
 	endpoint_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
+	
+	cluster::binding::config_t bind_cfg;
+	cluster::binding::create(root_node_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 
 	ABORT_APP_ON_FAILURE(bool_cluster != nullptr, ESP_LOGE(TAG, "bool cluster create failed"));
 	uint16_t bool_ep_id = endpoint::get_id(bool_cluster);
