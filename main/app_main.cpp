@@ -38,7 +38,6 @@ static led_strip_t *led_status;
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-#include "ACLAssist.hpp"
 #include <app/util/binding-table.h>
 #include <esp_matter_client.h>
 #include <app/AttributePathParams.h>
@@ -78,8 +77,8 @@ dynamic_commissionable_data_provider g_dynamic_passcode_provider;
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
 static bool do_subscribe = true;
-static constexpr chip::ClusterId   kContactSensorClusterId = chip::app::Clusters::BooleanState::Id;               // 0x000F
-static constexpr chip::AttributeId kContactSensorAttrId   = chip::app::Clusters::BooleanState::Attributes::StateValue::Id; // 0x0000
+static constexpr chip::ClusterId kContactSensorClusterId = chip::app::Clusters::BooleanState::Id;									// 0x000F
+static constexpr chip::AttributeId kContactSensorAttrId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;			// 0x0000
 #endif
 
 static void init_event_cb(void *ptr, uint16_t endpoint_id) {
@@ -224,6 +223,7 @@ static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint
     return ESP_OK;
 }
 
+
 static attribute_t *cover_currentPositionLiftPercent100ths;
 static attribute_t *cover_targetPositionLiftPercent100ths;
 static attribute_t *cover_operationalStatus;
@@ -339,7 +339,7 @@ extern "C" void app_main() {
 		err = nvs_flash_init();
 	}
 	ESP_ERROR_CHECK(err);
-	ESP_LOGI(TAG, "NVS init OK – ready for Matter");
+	ESP_LOGI(TAG, "NVS initialized successfully!");
 
 	// set up the led indicator
 	led_strip_config_t strip_config = {
@@ -357,7 +357,7 @@ extern "C" void app_main() {
 		}
 	};
 	led_strip_new_rmt_device(&strip_config, &rmt_config, &led_status);
-	led_strip_set_pixel(led_status, 0, 0, 0, 0); // Blue color to indicate the device is powered on
+	led_strip_set_pixel(led_status, 0, 0, 0, 0);
 	led_strip_refresh(led_status);
 
 	app_driver_handle_t switch_handle = app_driver_switch_init();
@@ -414,24 +414,6 @@ extern "C" void app_main() {
 	esp_matter::endpoint::contact_sensor::config_t contact_sensor_config = {};
 	endpoint_t *contact_sensor_ep = esp_matter::endpoint::contact_sensor::create(node, &contact_sensor_config, CLUSTER_FLAG_SERVER, NULL);
 
-	/*esp_matter::cluster_t *bool_srv = esp_matter::cluster::create(
-        root_ep,
-        chip::app::Clusters::BooleanState::Id,
-        NULL);
-
-	if (!bool_srv) {
-		ESP_LOGE(TAG, "Failed to create boolean state cluster");
-		return;
-	}
-
-	// add the required attribute for the boolean state cluster
-	attribute_t *state_attr = cluster::boolean_state::attribute::create_state_value(bool_srv, false);
-
-	if (!state_attr) {
-		ESP_LOGE(TAG, "Failed to create state value attribute");
-		return;
-	}
-	*/
 	cluster::binding::config_t bind_cfg;
 	cluster::binding::create(contact_sensor_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 	#endif
