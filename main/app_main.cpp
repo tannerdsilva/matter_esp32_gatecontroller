@@ -247,7 +247,7 @@ extern "C" void app_main() {
 	endpoint_t *root_node_ep = endpoint::get_first(node);
 
 	esp_matter::cluster::boolean_state::config_t bool_cfg {};
-	endpoint_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
+	cluster_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
 	
 	cluster::binding::config_t bind_cfg;
 	cluster::binding::create(root_node_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
