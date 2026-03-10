@@ -106,7 +106,6 @@ esp_err_t SubscriptionManager::AddBinding(
 	sub->remote_node_id = entry.nodeId;
 	sub->fabric_index = entry.fabricIndex;
 	sub->peer = nullptr;
-
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
 		m_pending_subs[sub->remote_node_id].push_back(std::move(sub));

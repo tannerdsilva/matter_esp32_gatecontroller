@@ -10,6 +10,7 @@ CONDITIONS OF ANY KIND, either express or implied.
 #include <esp_log.h>
 #include <nvs_flash.h>
 
+#include <optional>
 #include <esp_matter.h>
 #include <app/clusters/bindings/binding-table.h>
 #include <app/clusters/boolean-state-server/boolean-state-cluster.h>
@@ -22,6 +23,8 @@ CONDITIONS OF ANY KIND, either express or implied.
 #include "closure_control.h"
 #elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
 #include "window_covering.h"
+#elifdef CONFIG_MODE_CONTACT_SENSOR
+#include "contact_sensor.h"
 #endif
 
 #include <common_macros.h>
@@ -140,13 +143,20 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
-		ESP_LOGI(TAG, "bindings changed via cluster");
+		ESP_LOGE(TAG, "BINDINGS CHANGED VIA CLUSTER");
+		// load the binding table, iterate through the entries.
 		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
 		std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
 		size_t tableSize = gtableInstance.Size();
 		size_t i = 0;
 		for (i = 0; i < tableSize; i++) {
 			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
+			
+			chip::FabricIndex fabric_index = bindingTableEntry.fabricIndex;
+			chip::NodeId node_id = bindingTableEntry.nodeId;
+			std::optional<chip::ClusterId> cluster_id = bindingTableEntry.clusterId;
+			chip::EndpointId remote_ep = bindingTableEntry.remote;
+
 			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
 			if (rc != ESP_OK) {
 				ESP_LOGE(TAG, "failed to add binding subscription");
@@ -222,6 +232,15 @@ extern "C" void app_main() {
 	switch_endpoint_id = endpoint::get_id(window_covering_endpoint);
 	ESP_LOGI(TAG, "Window Covering Endpoint created with endpoint id %d", switch_endpoint_id);
 	
+	#elifdef CONFIG_MODE_CONTACT_SENSOR
+
+	// CONTACT SENSOR MODE (matter v1.5)
+
+	endpoint_t *contact_sensor_endpoint = endpoint_create_contact_sensor(node);
+	ABORT_APP_ON_FAILURE(contact_sensor_endpoint != nullptr, ESP_LOGE(TAG, "failed to create contact sensor endpoint"));
+	switch_endpoint_id = endpoint::get_id(contact_sensor_endpoint);
+	ESP_LOGI(TAG, "Contact Sensor Endpoint created with endpoint id %d", switch_endpoint_id);
+
 	#endif
 
 	// the root endpoint of the data model.
