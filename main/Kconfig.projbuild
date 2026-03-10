@@ -63,9 +63,10 @@ menu "Example Configuration"
             help
               Build the firmware for the *window covering legacy* use‑case. This enables the WindowCovering server cluster without the closure control cluster, and disables the chime/closure specific code paths.
 		
-		config MODE_CONTACT_SENSOR
-			bool "Contact Sensor mode"
-			help
-			  Build the firmware for the *contact sensor* use‑case.
+        config MODE_CONTACT_SENSOR
+            bool "Contact Sensor mode"
+            help
+              Build the firmware for the *contact sensor* use‑case.
+
 	endchoice
 endmenu
