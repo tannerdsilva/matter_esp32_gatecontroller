@@ -235,8 +235,8 @@ extern "C" void app_main() {
 	#elifdef CONFIG_MODE_CONTACT_SENSOR
 
 	// CONTACT SENSOR MODE (matter v1.5)
-
-	endpoint_t *contact_sensor_endpoint = endpoint_create_contact_sensor(node);
+	contact_sensor_context_t contact_sensor_context;
+	endpoint_t *contact_sensor_endpoint = endpoint_create_contact_sensor(node, &contact_sensor_context);
 	ABORT_APP_ON_FAILURE(contact_sensor_endpoint != nullptr, ESP_LOGE(TAG, "failed to create contact sensor endpoint"));
 	switch_endpoint_id = endpoint::get_id(contact_sensor_endpoint);
 	ESP_LOGI(TAG, "Contact Sensor Endpoint created with endpoint id %d", switch_endpoint_id);
