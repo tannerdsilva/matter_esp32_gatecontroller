@@ -11,3 +11,4 @@ struct contact_sensor_context {
 typedef struct contact_sensor_context contact_sensor_context_t;
 
 esp_matter::endpoint_t *endpoint_create_contact_sensor(esp_matter::node_t *node, contact_sensor_context_t *context);
+esp_err_t contact_sensor_set_state(contact_sensor_context_t *context, bool state);
