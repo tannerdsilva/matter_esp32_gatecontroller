@@ -141,14 +141,14 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		}
 		break;
 	case chip::DeviceLayer::DeviceEventType::kServerReady:
-		ESP_LOGI(TAG, "server ready");
+		ESP_LOGE(TAG, "SERVER READY - %i BINDINGS IN TABLE", chip::app::Clusters::Binding::Table::GetInstance().Size());
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGE(TAG, "BINDINGS CHANGED VIA CLUSTER");
 		// load the binding table, iterate through the entries.
 		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
-		std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
+		// std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
 		size_t tableSize = gtableInstance.Size();
 		size_t i = 0;
 		for (i = 0; i < tableSize; i++) {
@@ -157,16 +157,20 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 			chip::NodeId node_id = bindingTableEntry.nodeId;
 			std::optional<chip::ClusterId> cluster_id = bindingTableEntry.clusterId;
 			chip::EndpointId remote_ep = bindingTableEntry.remote;
+			/*
 			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
 			if (rc != ESP_OK) {
 				ESP_LOGE(TAG, "failed to add binding subscription");
 				continue;
 			}
+			*/
 		}
+		/*
 		esp_err_t rc = subscription_manager.FinishAdditions(new_subs);
 		if (rc != ESP_OK) {
 			ESP_LOGE(TAG, "failed to finish adding subscriptions");
 		}
+		*/
 		break;
     }
     break;
@@ -243,12 +247,13 @@ extern "C" void app_main() {
 
 	#endif
 
-	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-	ABORT_APP_ON_FAILURE(endpoint_create_binding_cluster(node, &binding_context) == ESP_OK, ESP_LOGE(TAG, "failed to create binding cluster endpoint"));
-	#endif
-
 	// the root endpoint of the data model.
 	endpoint_t *root_node_ep = endpoint::get_first(node);
+
+	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+	ABORT_APP_ON_FAILURE(endpoint_create_binding_cluster(root_node_ep, &binding_context) == ESP_OK, ESP_LOGE(TAG, "failed to create binding cluster endpoint"));
+	#endif
+
 /*
 	esp_matter::cluster::boolean_state::config_t bool_cfg {};
 	cluster_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
