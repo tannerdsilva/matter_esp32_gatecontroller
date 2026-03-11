@@ -15,6 +15,10 @@
 #include "esp_openthread_types.h"
 #endif
 
+#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+#include "bindings_cluster.h"
+#endif
+
 typedef void *app_driver_handle_t;
 
 /** Initialize the switch driver

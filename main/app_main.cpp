@@ -46,7 +46,8 @@ led_indicator_subsystem_t led_indicator_subsystem;
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
 #ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-// #include "ACLAssist.hpp"
+#include "bindings_cluster.h"
+binding_cluster_context_t binding_context;
 #include <app/clusters/bindings/binding-table.h>
 #include <esp_matter_client.h>
 #include <app/AttributePathParams.h>
@@ -71,7 +72,8 @@ led_indicator_subsystem_t led_indicator_subsystem;
 #include <app/clusters/time-synchronization-server/DefaultTimeSyncDelegate.h>
 #endif
 
-static const char *TAG = "app_main";
+#define TAG "app_main"
+
 uint16_t switch_endpoint_id = 0;
 
 using namespace esp_matter;
@@ -151,12 +153,10 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		size_t i = 0;
 		for (i = 0; i < tableSize; i++) {
 			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
-			
 			chip::FabricIndex fabric_index = bindingTableEntry.fabricIndex;
 			chip::NodeId node_id = bindingTableEntry.nodeId;
 			std::optional<chip::ClusterId> cluster_id = bindingTableEntry.clusterId;
 			chip::EndpointId remote_ep = bindingTableEntry.remote;
-
 			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
 			if (rc != ESP_OK) {
 				ESP_LOGE(TAG, "failed to add binding subscription");
@@ -243,18 +243,19 @@ extern "C" void app_main() {
 
 	#endif
 
+	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
+	ABORT_APP_ON_FAILURE(endpoint_create_binding_cluster(node, &binding_context) == ESP_OK, ESP_LOGE(TAG, "failed to create binding cluster endpoint"));
+	#endif
+
 	// the root endpoint of the data model.
 	endpoint_t *root_node_ep = endpoint::get_first(node);
-
+/*
 	esp_matter::cluster::boolean_state::config_t bool_cfg {};
 	cluster_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
-	
-	cluster::binding::config_t bind_cfg;
-	cluster::binding::create(root_node_ep, &bind_cfg, CLUSTER_FLAG_SERVER);
 
 	ABORT_APP_ON_FAILURE(bool_cluster != nullptr, ESP_LOGE(TAG, "bool cluster create failed"));
 	uint16_t bool_ep_id = endpoint::get_id(bool_cluster);
-
+*/
 	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
 	ABORT_APP_ON_FAILURE(root_node_ep != nullptr, ESP_LOGE(TAG, "Failed to find root node endpoint"));
 	cluster::time_synchronization::config_t time_sync_cfg;
