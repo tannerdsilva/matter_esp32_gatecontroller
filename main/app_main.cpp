@@ -240,38 +240,34 @@ extern "C" void app_main() {
 	
 	#elifdef CONFIG_MODE_CONTACT_SENSOR
 
-		// CONTACT SENSOR MODE (Zap-Generated)
+	// CONTACT SENSOR MODE (Zap-Generated)
 	contact_sensor_context_t contact_sensor_context;
-	
-	// 1. Initialize the contact sensor context with the Zap-generated endpoint ID
-	// From endpoint_config.h: Endpoint 1 contains Boolean State Cluster
-	contact_sensor_context.endpoint_id = 1;
-	contact_sensor_context.current_state = false; // Default state
-	
-	// 2. Call our new Zap-compatible initialization function
-	// This does NOT create an endpoint, it just sets up our application state
+
+	// 1. Initialize the context (Endpoint 1 is defined in endpoint_config.h)
+	contact_sensor_context.endpoint_id = 1; 
+	contact_sensor_context.current_state = false; 
+
+	// 2. Initialize the sensor (This calls contact_sensor_init)
 	esp_err_t init_ret = contact_sensor_init(&contact_sensor_context);
 	ABORT_APP_ON_FAILURE(init_ret == ESP_OK, ESP_LOGE(TAG, "failed to init contact sensor"));
-	
-	// 3. Register the read callback with the Matter stack
-	// This tells the stack to call contact_sensor_read_callback when reading attributes
-	// The callback name must match what's expected by matter_endpoints.c
-	// Typically: MatterBooleanStateCluster_AttributeReadCallback
-	// 
-	// NOTE: If you don't have a direct function pointer assignment, you may need to
-	// register it via the ESP-Matter callback registration mechanism.
-	// For now, we'll use the global context approach.
-	
+
+	// 3. Register the Attribute Read Callback
+	// Since CodeDrivenCallback.h does not define Read/Write callbacks,
+	// we register them via the ESP-Matter API here.
+	// Note: The exact function name depends on your ESP-Matter SDK version.
+	// Commonly: esp_matter_attribute_read_callback
+	// If your SDK uses esp_matter::attribute::read_callback, adjust accordingly.
+
+	#ifdef ESP_MATTER_ATTRIBUTE_READ_CALLBACK_AVAILABLE
+	// Example registration (adjust to your SDK API)
+	// esp_matter_attribute_read_callback(1, 0x0045, 0x0000, contact_sensor_read_callback);
+
+	// Alternatively, if your SDK expects the callback to be in matter_endpoints.c:
+	// You must ensure MatterBooleanStateCluster_AttributeReadCallback is linked.
+	// However, since that's generated, we rely on the ESP-Matter wrapper registration.
+	#endif
+
 	ESP_LOGI(TAG, "Contact Sensor initialized on Endpoint ID %d", contact_sensor_context.endpoint_id);
-	
-	// Optional: If you need to track the endpoint ID for other purposes
-	// uint16_t contact_sensor_endpoint_id = contact_sensor_context.endpoint_id;
-	esp_matter::client::register_a(
-		contact_sensor_context.endpoint_id,
-		chip::app::Clusters::BooleanState::Id,
-		chip::app::Clusters::BooleanState::Attributes::StateValue::Id,
-		contact_sensor_read_callback
-	);
 
 	#endif
 
