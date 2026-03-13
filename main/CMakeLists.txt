@@ -4,7 +4,9 @@ if (CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER)
     list(APPEND SRC_DIRS_LIST "custom_provider")
 endif()
 
+list(APPEND SRC_DIRS_LIST "zap-generated")
+
 idf_component_register(SRC_DIRS          ${SRC_DIRS_LIST}
-                       PRIV_INCLUDE_DIRS  "." "${ESP_MATTER_PATH}/examples/common/utils")
+                       PRIV_INCLUDE_DIRS  "." "${ESP_MATTER_PATH}/examples/common/utils" "zap-generated")
 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")
