@@ -1,14 +1,19 @@
 #pragma once
 
-#include <esp_matter.h>
-#include <esp_matter_core.h>
+#include <stdint.h>
+#include <esp_err.h>
+#include "endpoint_config.h"
 
-struct contact_sensor_context {
-	esp_matter::endpoint_t *endpoint;
-	esp_matter::cluster_t *boolean_state_cluster;
-	esp_matter::attribute_t *state_attribute;
-};
-typedef struct contact_sensor_context contact_sensor_context_t;
+typedef struct {
+	bool current_state;
+	uint16_t endpoint_id;
+} contact_sensor_context_t;
 
-esp_matter::endpoint_t *endpoint_create_contact_sensor(esp_matter::node_t *node, contact_sensor_context_t *context);
-esp_err_t contact_sensor_set_state(contact_sensor_context_t *context, bool state);
+// initialize the sensor context and state.
+esp_err_t contact_sensor_init(contact_sensor_context_t *context);
+
+// update the sensor state and report the change to the Matter data model.
+esp_err_t contact_sensor_update_state(contact_sensor_context_t *context, bool new_state);
+
+// callback implementation
+void contact_sensor_read_callback(uint16_t endpoint_id, uint16_t cluster_id, uint16_t attribute_id, uint8_t *buffer, uint16_t *length);

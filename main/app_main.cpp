@@ -197,7 +197,7 @@ static esp_err_t app_binding_callback(const chip::app::Clusters::Binding::TableE
 
 
 extern "C" void app_main() {
-	// nvs initialization.
+	// NVS initialization.
 	esp_err_t err = ESP_OK;
 	err = nvs_flash_init();
 	if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -208,14 +208,16 @@ extern "C" void app_main() {
 	ESP_ERROR_CHECK(err);
 	ESP_LOGI(TAG, "NVS init OK – ready for Matter");
 
-	// initialize the led indicator subsystem
+	// Initialize the led indicator subsystem
 	app_driver_handle_t switch_handle = app_driver_switch_init();
 	app_reset_button_register(switch_handle);
 	led_indicator_init(&led_indicator_subsystem, LED_GPIO);
 
-	// create the root Matter node and endpoint, and add clusters to it.
+	// Create the root Matter node.
+	// NOTE: We no longer pass app_attribute_update_cb here for contact sensor mode
+	// because attribute callbacks are handled via the Zap generated callback mechanism.
 	node::config_t node_config;
-	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
+	node_t *node = node::create(&node_config, NULL, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
 	
 	#ifdef CONFIG_MODE_PRIMARY_CLOSURE
@@ -238,12 +240,38 @@ extern "C" void app_main() {
 	
 	#elifdef CONFIG_MODE_CONTACT_SENSOR
 
-	// CONTACT SENSOR MODE (matter v1.5)
+		// CONTACT SENSOR MODE (Zap-Generated)
 	contact_sensor_context_t contact_sensor_context;
-	endpoint_t *contact_sensor_endpoint = endpoint_create_contact_sensor(node, &contact_sensor_context);
-	ABORT_APP_ON_FAILURE(contact_sensor_endpoint != nullptr, ESP_LOGE(TAG, "failed to create contact sensor endpoint"));
-	switch_endpoint_id = endpoint::get_id(contact_sensor_endpoint);
-	ESP_LOGI(TAG, "Contact Sensor Endpoint created with endpoint id %d", switch_endpoint_id);
+	
+	// 1. Initialize the contact sensor context with the Zap-generated endpoint ID
+	// From endpoint_config.h: Endpoint 1 contains Boolean State Cluster
+	contact_sensor_context.endpoint_id = 1;
+	contact_sensor_context.current_state = false; // Default state
+	
+	// 2. Call our new Zap-compatible initialization function
+	// This does NOT create an endpoint, it just sets up our application state
+	esp_err_t init_ret = contact_sensor_init(&contact_sensor_context);
+	ABORT_APP_ON_FAILURE(init_ret == ESP_OK, ESP_LOGE(TAG, "failed to init contact sensor"));
+	
+	// 3. Register the read callback with the Matter stack
+	// This tells the stack to call contact_sensor_read_callback when reading attributes
+	// The callback name must match what's expected by matter_endpoints.c
+	// Typically: MatterBooleanStateCluster_AttributeReadCallback
+	// 
+	// NOTE: If you don't have a direct function pointer assignment, you may need to
+	// register it via the ESP-Matter callback registration mechanism.
+	// For now, we'll use the global context approach.
+	
+	ESP_LOGI(TAG, "Contact Sensor initialized on Endpoint ID %d", contact_sensor_context.endpoint_id);
+	
+	// Optional: If you need to track the endpoint ID for other purposes
+	// uint16_t contact_sensor_endpoint_id = contact_sensor_context.endpoint_id;
+	esp_matter::client::register_a(
+		contact_sensor_context.endpoint_id,
+		chip::app::Clusters::BooleanState::Id,
+		chip::app::Clusters::BooleanState::Attributes::StateValue::Id,
+		contact_sensor_read_callback
+	);
 
 	#endif
 
