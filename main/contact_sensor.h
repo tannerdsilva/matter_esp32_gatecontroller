@@ -2,18 +2,19 @@
 
 #include <stdint.h>
 #include <esp_err.h>
-#include "endpoint_config.h"
-#include <app/util/basic-types.h>
+#include "zap-generated/endpoint_config.h"
+#include <app/util/basic-types.h> // For chip::EndpointId
+#include <app/clusters/boolean-state-server/boolean-state-cluster.h>
 
 typedef struct {
     bool current_state;
     uint16_t endpoint_id;
 } contact_sensor_context_t;
 
-// initialize the sensor context and state.
+// Initialize the sensor context and state.
 esp_err_t contact_sensor_init(contact_sensor_context_t *context);
 
-// update the sensor state and report the change to the Matter data model.
+// Update the sensor state and report the change to the Matter data model.
 esp_err_t contact_sensor_update_state(contact_sensor_context_t *context, bool new_state);
 
 /* 

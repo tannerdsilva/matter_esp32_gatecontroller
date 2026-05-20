@@ -14,11 +14,8 @@ CONDITIONS OF ANY KIND, either express or implied.
 #include <esp_matter.h>
 #include <app/clusters/bindings/binding-table.h>
 #include <app/clusters/boolean-state-server/boolean-state-cluster.h>
-#include <esp_matter_providers.h>
-#include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
 
-#include "bindings_core_v2.h"
 #ifdef CONFIG_MODE_PRIMARY_CLOSURE
 #include "closure_control.h"
 #elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
@@ -57,7 +54,6 @@ binding_cluster_context_t binding_context;
 #include <app/ConcreteAttributePath.h>
 #include <lib/core/TLVReader.h>
 #include <app/server/Server.h>
-// #include "ClientCallbackHandler.hpp"
 #endif
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
@@ -77,8 +73,6 @@ binding_cluster_context_t binding_context;
 uint16_t switch_endpoint_id = 0;
 
 using namespace esp_matter;
-using namespace esp_matter::attribute;
-using namespace esp_matter::endpoint;
 
 #if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
 dynamic_commissionable_data_provider g_dynamic_passcode_provider;
@@ -216,10 +210,12 @@ extern "C" void app_main() {
 	// Create the root Matter node.
 	// NOTE: We no longer pass app_attribute_update_cb here for contact sensor mode
 	// because attribute callbacks are handled via the Zap generated callback mechanism.
+	/*
 	node::config_t node_config;
 	node_t *node = node::create(&node_config, NULL, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
-	
+	*/
+
 	#ifdef CONFIG_MODE_PRIMARY_CLOSURE
 	
 	// CLOSURE MODE (matter v1.5)
@@ -239,45 +235,26 @@ extern "C" void app_main() {
 	ESP_LOGI(TAG, "Window Covering Endpoint created with endpoint id %d", switch_endpoint_id);
 	
 	#elifdef CONFIG_MODE_CONTACT_SENSOR
-
-	// CONTACT SENSOR MODE (Zap-Generated)
+    /*
 	contact_sensor_context_t contact_sensor_context;
+    contact_sensor_context.endpoint_id = 1; 
+    contact_sensor_context.current_state = false; 
+    
+    esp_err_t init_ret = contact_sensor_init(&contact_sensor_context);
+    ABORT_APP_ON_FAILURE(init_ret == ESP_OK, ESP_LOGE(TAG, "failed to init contact sensor"));
 
-	// 1. Initialize the context (Endpoint 1 is defined in endpoint_config.h)
-	contact_sensor_context.endpoint_id = 1; 
-	contact_sensor_context.current_state = false; 
-
-	// 2. Initialize the sensor (This calls contact_sensor_init)
-	esp_err_t init_ret = contact_sensor_init(&contact_sensor_context);
-	ABORT_APP_ON_FAILURE(init_ret == ESP_OK, ESP_LOGE(TAG, "failed to init contact sensor"));
-
-	// 3. Register the Attribute Read Callback
-	// Since CodeDrivenCallback.h does not define Read/Write callbacks,
-	// we register them via the ESP-Matter API here.
-	// Note: The exact function name depends on your ESP-Matter SDK version.
-	// Commonly: esp_matter_attribute_read_callback
-	// If your SDK uses esp_matter::attribute::read_callback, adjust accordingly.
-
-	#ifdef ESP_MATTER_ATTRIBUTE_READ_CALLBACK_AVAILABLE
-	// Example registration (adjust to your SDK API)
-	// esp_matter_attribute_read_callback(1, 0x0045, 0x0000, contact_sensor_read_callback);
-
-	// Alternatively, if your SDK expects the callback to be in matter_endpoints.c:
-	// You must ensure MatterBooleanStateCluster_AttributeReadCallback is linked.
-	// However, since that's generated, we rely on the ESP-Matter wrapper registration.
-	#endif
-
-	ESP_LOGI(TAG, "Contact Sensor initialized on Endpoint ID %d", contact_sensor_context.endpoint_id);
-
+    ESP_LOGI(TAG, "Contact Sensor initialized on Endpoint ID %d", contact_sensor_context.endpoint_id);
+	*/
 	#endif
 
 	// the root endpoint of the data model.
+	/*
 	endpoint_t *root_node_ep = endpoint::get_first(node);
 
 	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
 	ABORT_APP_ON_FAILURE(endpoint_create_binding_cluster(root_node_ep, &binding_context) == ESP_OK, ESP_LOGE(TAG, "failed to create binding cluster endpoint"));
 	#endif
-
+	*/
 /*
 	esp_matter::cluster::boolean_state::config_t bool_cfg {};
 	cluster_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
@@ -314,4 +291,20 @@ extern "C" void app_main() {
 	esp_matter::client::binding_manager_init();
 	err = esp_matter::start(app_event_cb, NULL);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to start Matter, err:%d", err));
+
+	// wait for 30 seconds
+	bool contact_sensor_state = false;
+	while (true) {
+		// delay for 30 seconds
+		vTaskDelay(30000 / portTICK_PERIOD_MS);
+		// toggle the contact sensor state
+		contact_sensor_state = !contact_sensor_state;
+		ESP_LOGI(TAG, "Toggling contact sensor state to: %s", contact_sensor_state ? "OPEN" : "CLOSED");
+		// update the sensor state and report to Matter
+		esp_err_t update_ret = contact_sensor_update_state(&contact_sensor_context, contact_sensor_state);
+		if (update_ret != ESP_OK) {
+			ESP_LOGE(TAG, "Failed to update contact sensor state: %s", esp_err_to_name(update_ret));
+		}
+	}
+	
 }
