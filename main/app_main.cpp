@@ -10,22 +10,19 @@ CONDITIONS OF ANY KIND, either express or implied.
 #include <esp_log.h>
 #include <nvs_flash.h>
 
-#include <optional>
 #include <esp_matter.h>
+#include <esp_matter_client.h>
 #include <app/clusters/bindings/binding-table.h>
 #include <app/clusters/boolean-state-server/boolean-state-cluster.h>
+#include <app/clusters/window-covering-server/window-covering-server.h>
 #include <esp_matter_providers.h>
 #include <esp_matter_attribute.h>
 #include <platform/CHIPDeviceEvent.h>
 
-#include "bindings_core_v2.h"
-#ifdef CONFIG_MODE_PRIMARY_CLOSURE
-#include "closure_control.h"
-#elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
-#include "window_covering.h"
-#elifdef CONFIG_MODE_CONTACT_SENSOR
-#include "contact_sensor.h"
-#endif
+#include <app/ReadClient.h>
+#include <app/ConcreteAttributePath.h>
+#include <lib/core/TLVReader.h>
+#include <app/server/Server.h>
 
 #include <common_macros.h>
 #include <app_priv.h>
@@ -45,21 +42,6 @@ led_indicator_subsystem_t led_indicator_subsystem;
 #define GPIO_OUTPUT_COVER_STOP			GPIO_NUM_4
 #define GPIO_INPUT_COVER_CLOSED			GPIO_NUM_10
 
-#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-#include "bindings_cluster.h"
-binding_cluster_context_t binding_context;
-#include <app/clusters/bindings/binding-table.h>
-#include <esp_matter_client.h>
-#include <app/AttributePathParams.h>
-#include <access/SubjectDescriptor.h>   // <-- provides chip::Access::Target
-#include <access/AccessControl.h>       // <-- AccessControl singleton
-
-#include <app/ConcreteAttributePath.h>
-#include <lib/core/TLVReader.h>
-#include <app/server/Server.h>
-// #include "ClientCallbackHandler.hpp"
-#endif
-
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
@@ -75,34 +57,104 @@ binding_cluster_context_t binding_context;
 #define TAG "app_main"
 
 uint16_t switch_endpoint_id = 0;
+static esp_matter::endpoint_t* s_cover_endpoint = nullptr;
 
-using namespace esp_matter;
-using namespace esp_matter::attribute;
-using namespace esp_matter::endpoint;
+// Callback for remote boolean state updates
+class BooleanStateReadCallback : public chip::app::ReadClient::Callback {
+public:
+    virtual void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+        ESP_LOGI(TAG, "Subscription established");
+    }
 
-#if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
-dynamic_commissionable_data_provider g_dynamic_passcode_provider;
-#endif
+    virtual void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, 
+                                 chip::TLV::TLVReader *aReader, 
+                                 const chip::app::StatusIB &aStatus) override {
+        if (aStatus.mStatus != chip::Protocols::InteractionModel::Status::Success) {
+            return;
+        }
 
-static void init_event_cb(void *ptr, uint16_t endpoint_id) {
-	ESP_LOGI(TAG, "init_event_cb called for endpoint_id=%d", endpoint_id);
+        bool is_open = false;
+        aReader->Next(); // Skip tag
+        aReader->Get(is_open);
+
+        uint16_t position = is_open ? 100 : 0;
+        esp_matter_attr_val_t new_val = esp_matter_int16(position);
+        esp_matter::attribute::set_val(switch_endpoint_id, 
+            chip::app::Clusters::WindowCovering::Id, 
+            chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id, 
+            &new_val);
+            
+        ESP_LOGI(TAG, "Remote contact: %s -> Local pos: %d", is_open ? "OPEN" : "CLOSED", position);
+    }
+
+    virtual void OnError(CHIP_ERROR aError) override {
+        ESP_LOGI(TAG, "ReadClient Error: %s", ErrorStr(aError));
+    }
+
+    virtual void OnDone(chip::app::ReadClient * apReadClient) override {
+        ESP_LOGI(TAG, "ReadClient Done");
+    }
+};
+
+static BooleanStateReadCallback s_callback_handler;
+
+// Helper to start subscription once peer device is available
+void start_remote_subscription(chip::app::Clusters::Binding::TableEntry entry) {
+    // Allocate request handle on heap as it must persist until callback
+    esp_matter::client::request_handle_t *req_handle = new esp_matter::client::request_handle_t();
+    req_handle->type = esp_matter::client::SUBSCRIBE_ATTR;
+    
+    // Store remote endpoint in attribute_path for later use
+    req_handle->attribute_path.mEndpointId = entry.remote;
+    req_handle->attribute_path.mClusterId = chip::app::Clusters::BooleanState::Id;
+    req_handle->attribute_path.mAttributeId = chip::app::Clusters::BooleanState::Attributes::StateValue::Id;
+    
+    // Pass remote endpoint ID as request_data (can be retrieved in callback)
+    req_handle->request_data = (void*)(uintptr_t)entry.remote;
+    
+    esp_err_t err = esp_matter::client::connect(nullptr, entry.fabricIndex, entry.nodeId, req_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initiate connection to node %llu", (unsigned long long)entry.nodeId);
+        delete req_handle;
+    }
 }
 
-static esp_err_t override_stop_cmd_handler(const ConcreteCommandPath &command_path, TLVReader &tlv_data, void *opaque_ptr) {
-	ESP_LOGE(TAG, "override_stop_cmd_handler");
-	return ESP_ERR_INVALID_ARG;
-}
-
-static esp_err_t override_cmd_handler(const ConcreteCommandPath &command_path, TLVReader &tlv_data, void *opaque_ptr) {
-	ESP_LOGE(TAG, "override_cmd_handler");
-	return ESP_ERR_INVALID_ARG;
+// Callback invoked by client::connect when session is ready
+static void connection_success_callback(esp_matter::client::peer_device_t *peer_device, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
+    if (!peer_device) {
+        ESP_LOGE(TAG, "Peer device is null in connection success callback");
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Connection established, starting subscription");
+    
+    // Recover remote endpoint ID from request_data
+    chip::EndpointId remote_ep = (chip::EndpointId)(uintptr_t)req_handle->request_data;
+    
+    // Start subscription to the remote endpoint
+    esp_err_t err = esp_matter::client::interaction::subscribe::send_request(
+        peer_device, 
+        &req_handle->attribute_path, 
+        1, // attr_path_size
+        nullptr, // event_path
+        0,       // event_path_size
+        1000,    // min_interval_ms
+        5000,    // max_interval_ms
+        true,    // keep_subscription
+        true,    // auto_resubscribe
+        s_callback_handler
+    );
+    
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start subscription: %d", err);
+    } else {
+        ESP_LOGI(TAG, "Subscription started to remote endpoint %d", remote_ep);
+    }
 }
 
 static uint16_t event_stage = 0;
-static SubscriptionManager subscription_manager;
+
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
-	size_t tableSize;
-	size_t i = 0;
 	switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
 		ESP_LOGI(TAG, "interface IP Address Changed");
@@ -140,37 +192,33 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 			led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
 		}
 		break;
-	case chip::DeviceLayer::DeviceEventType::kServerReady:
-		ESP_LOGE(TAG, "SERVER READY - %i BINDINGS IN TABLE", chip::app::Clusters::Binding::Table::GetInstance().Size());
-		break;
-
+		
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
-		ESP_LOGE(TAG, "BINDINGS CHANGED VIA CLUSTER");
-		// load the binding table, iterate through the entries.
-		chip::app::Clusters::Binding::Table gtableInstance = chip::app::Clusters::Binding::Table::GetInstance();
-		// std::map<BindingKey, std::unique_ptr<Subscription>> new_subs;
-		size_t tableSize = gtableInstance.Size();
-		size_t i = 0;
-		for (i = 0; i < tableSize; i++) {
-			chip::app::Clusters::Binding::TableEntry bindingTableEntry = gtableInstance.GetAt(i);
-			chip::FabricIndex fabric_index = bindingTableEntry.fabricIndex;
-			chip::NodeId node_id = bindingTableEntry.nodeId;
-			std::optional<chip::ClusterId> cluster_id = bindingTableEntry.clusterId;
-			chip::EndpointId remote_ep = bindingTableEntry.remote;
-			/*
-			esp_err_t rc = subscription_manager.AddBinding(bindingTableEntry, new_subs);
-			if (rc != ESP_OK) {
-				ESP_LOGE(TAG, "failed to add binding subscription");
-				continue;
+		ESP_LOGI(TAG, "bindings changed via cluster");
+		
+		chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
+		size_t count = table.Size();
+
+		for (size_t i = 0; i < count; i++) {
+			chip::app::Clusters::Binding::TableEntry entry = table.GetAt(i);
+			
+			// only care about boolean state bindings
+			if (entry.clusterId.has_value() && entry.clusterId.value() == chip::app::Clusters::BooleanState::Id) {
+				ESP_LOGI(TAG, "Found BooleanState binding to node %llu ep %d", (unsigned long long)entry.nodeId, entry.remote);
+				
+                esp_err_t err = esp_matter::client::set_request_callback(
+                    (esp_matter::client::request_callback_t)connection_success_callback,
+                    nullptr,
+                    nullptr
+                );
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to register request callback");
+                }
+                
+                start_remote_subscription(entry);
+                break;
 			}
-			*/
 		}
-		/*
-		esp_err_t rc = subscription_manager.FinishAdditions(new_subs);
-		if (rc != ESP_OK) {
-			ESP_LOGE(TAG, "failed to finish adding subscriptions");
-		}
-		*/
 		break;
     }
     break;
@@ -180,18 +228,13 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
     }
 }
 
-static esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id, uint8_t effect_variant, void *priv_data) {
+static esp_err_t app_identification_cb(esp_matter::identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id, uint8_t effect_variant, void *priv_data) {
 	ESP_LOGI(TAG, "identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
 	return ESP_OK;
 }
 
-static esp_err_t app_attribute_update_cb(callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data) {
+static esp_err_t app_attribute_update_cb(esp_matter::attribute::callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id, uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data) {
 	ESP_LOGI(TAG, "attribute updated: endpoint_id=%d", endpoint_id);
-	return ESP_OK;
-}
-
-static esp_err_t app_binding_callback(const chip::app::Clusters::Binding::TableEntry &binding_entry, void *context) {
-	ESP_LOGI(TAG, "BINDING CALLBACK");
 	return ESP_OK;
 }
 
@@ -213,66 +256,25 @@ extern "C" void app_main() {
 	app_reset_button_register(switch_handle);
 	led_indicator_init(&led_indicator_subsystem, LED_GPIO);
 
-	// create the root Matter node and endpoint, and add clusters to it.
-	node::config_t node_config;
-	node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
+	// create the root Matter node and endpoint
+	esp_matter::node::config_t node_config;
+	esp_matter::node_t *node = esp_matter::node::create(&node_config, app_attribute_update_cb, app_identification_cb);
 	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
 	
-	#ifdef CONFIG_MODE_PRIMARY_CLOSURE
+	// create window covering endpoint using new API
+	esp_matter::endpoint::window_covering::config_t wc_config;
 	
-	// CLOSURE MODE (matter v1.5)
-	
-	endpoint_t *closure_endpoint = endpoint_create_closure(node);
-	ABORT_APP_ON_FAILURE(closure_endpoint != nullptr, ESP_LOGE(TAG, "failed to create closure endpoint"));
-	switch_endpoint_id = endpoint::get_id(closure_endpoint);
-	ESP_LOGI(TAG, "Closure Control Endpoint created with endpoint id %d", switch_endpoint_id);
-	
-	#elifdef CONFIG_MODE_WINDOW_COVERING_LEGACY
-	
-	// WINDOW COVERING LEGACY MODE (matter v1.0)
-	
-	endpoint_t *window_covering_endpoint = endpoint_create_window_covering(node);
+	// FIX: Enable Lift Feature (0x0001) and Tilt Feature (0x0002) if needed.
+	// For a gate, we definitely need Lift.
+	wc_config.window_covering.feature_flags = 0x0001; // Enable Lift
+
+	esp_matter::endpoint_t *window_covering_endpoint = esp_matter::endpoint::window_covering::create(node, &wc_config, 0, nullptr);
 	ABORT_APP_ON_FAILURE(window_covering_endpoint != nullptr, ESP_LOGE(TAG, "failed to create window covering endpoint"));
-	switch_endpoint_id = endpoint::get_id(window_covering_endpoint);
-	ESP_LOGI(TAG, "Window Covering Endpoint created with endpoint id %d", switch_endpoint_id);
 	
-	#elifdef CONFIG_MODE_CONTACT_SENSOR
+	switch_endpoint_id = esp_matter::endpoint::get_id(window_covering_endpoint);
+	s_cover_endpoint = window_covering_endpoint;
 
-	// CONTACT SENSOR MODE (matter v1.5)
-	contact_sensor_context_t contact_sensor_context;
-	endpoint_t *contact_sensor_endpoint = endpoint_create_contact_sensor(node, &contact_sensor_context);
-	ABORT_APP_ON_FAILURE(contact_sensor_endpoint != nullptr, ESP_LOGE(TAG, "failed to create contact sensor endpoint"));
-	switch_endpoint_id = endpoint::get_id(contact_sensor_endpoint);
-	ESP_LOGI(TAG, "Contact Sensor Endpoint created with endpoint id %d", switch_endpoint_id);
-
-	#endif
-
-	// the root endpoint of the data model.
-	endpoint_t *root_node_ep = endpoint::get_first(node);
-
-	#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-	ABORT_APP_ON_FAILURE(endpoint_create_binding_cluster(root_node_ep, &binding_context) == ESP_OK, ESP_LOGE(TAG, "failed to create binding cluster endpoint"));
-	#endif
-
-/*
-	esp_matter::cluster::boolean_state::config_t bool_cfg {};
-	cluster_t *bool_cluster = cluster::boolean_state::create(root_node_ep, &bool_cfg, CLUSTER_FLAG_SERVER);
-
-	ABORT_APP_ON_FAILURE(bool_cluster != nullptr, ESP_LOGE(TAG, "bool cluster create failed"));
-	uint16_t bool_ep_id = endpoint::get_id(bool_cluster);
-*/
-	#ifdef CONFIG_ENABLE_SNTP_TIME_SYNC
-	ABORT_APP_ON_FAILURE(root_node_ep != nullptr, ESP_LOGE(TAG, "Failed to find root node endpoint"));
-	cluster::time_synchronization::config_t time_sync_cfg;
-	static chip::app::Clusters::TimeSynchronization::DefaultTimeSyncDelegate time_sync_delegate;
-	time_sync_cfg.delegate = &time_sync_delegate;
-	cluster_t *time_sync_cluster = cluster::time_synchronization::create(root_node_ep, &time_sync_cfg, CLUSTER_FLAG_SERVER);
-	ABORT_APP_ON_FAILURE(time_sync_cluster != nullptr, ESP_LOGE(TAG, "Failed to create time_sync_cluster"));
-	cluster::time_synchronization::feature::time_zone::config_t tz_cfg;
-	cluster::time_synchronization::feature::time_zone::add(time_sync_cluster, &tz_cfg);
-	#endif
-
-	ESP_LOGI(TAG, "window covering created with endpoint_id %d", switch_endpoint_id);
+	ESP_LOGI(TAG, "Window Covering Endpoint created with endpoint id %d", switch_endpoint_id);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 	/* Set OpenThread platform config */
@@ -287,7 +289,9 @@ extern "C" void app_main() {
 #if CONFIG_DYNAMIC_PASSCODE_COMMISSIONABLE_DATA_PROVIDER
 	esp_matter::set_custom_commissionable_data_provider(&g_dynamic_passcode_provider);
 #endif
+	
 	esp_matter::client::binding_manager_init();
-	err = esp_matter::start(app_event_cb, NULL);
+	// Updated start() signature expects intptr_t instead of void*
+	err = esp_matter::start(app_event_cb, (intptr_t)0);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to start Matter, err:%d", err));
 }
