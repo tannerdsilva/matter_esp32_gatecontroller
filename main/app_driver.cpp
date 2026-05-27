@@ -23,6 +23,7 @@
 #include <app_reset.h>
 
 static const char *TAG = "DRIVER";
+static const char *TAG_CLIENT = "CLIENT";
 
 /* ------------------------------------------------------------------ */
 /*  Motor relay — single GPIO, momentary pulse                         */
@@ -149,6 +150,7 @@ static void app_driver_button_toggle_cb(void *arg, void *data) {
 static void app_driver_client_callback(client::peer_device_t *peer_device, 
                                        client::request_handle_t *req_handle, 
                                        void *priv_data) {
+	ESP_LOGI(TAG_CLIENT, "Client callback triggered");
     (void)peer_device;
     (void)req_handle;
     (void)priv_data;
@@ -168,13 +170,10 @@ app_driver_handle_t app_driver_switch_init() {
     
     button_handle_t btns[BSP_BUTTON_NUM];
     ESP_ERROR_CHECK(bsp_iot_button_create(btns, NULL, BSP_BUTTON_NUM));
-    ESP_ERROR_CHECK(iot_button_register_cb(btns[0], BUTTON_PRESS_DOWN, NULL, 
-                                            app_driver_button_toggle_cb, NULL));
+    ESP_ERROR_CHECK(iot_button_register_cb(btns[0], BUTTON_PRESS_DOWN, NULL, app_driver_button_toggle_cb, NULL));
     
     // Register callbacks (satisfy API even if unused in local server mode)
-    client::set_request_callback(app_driver_client_callback, 
-                                 app_driver_client_group_invoke_command_callback, 
-                                 NULL);
+    client::set_request_callback(app_driver_client_callback, app_driver_client_group_invoke_command_callback, NULL);
     ESP_LOGI(TAG, "APP DRIVER INITIALIZED");
     return (app_driver_handle_t)btns[0];
 }

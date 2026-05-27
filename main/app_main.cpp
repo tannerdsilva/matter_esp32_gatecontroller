@@ -44,6 +44,7 @@ led_indicator_subsystem_t led_indicator_subsystem;
 
 #define TAG "app_main"
 static const char *TAG_BIND = "BIND_MGR";
+static const char *TAG_EVENT = "APP_EVENT_CB";
 static uint16_t event_stage = 0;
 uint16_t switch_endpoint_id = 0;
 static esp_matter::endpoint_t* s_cover_endpoint = nullptr;
@@ -185,21 +186,18 @@ public:
                                  chip::TLV::TLVReader *aReader, 
                                  const chip::app::StatusIB &aStatus) override {
         if (aStatus.mStatus != chip::Protocols::InteractionModel::Status::Success) {
-            ESP_LOGE(TAG_BIND, "⚠️ Subscription update failed");
+            ESP_LOGE(TAG_BIND, "⚠️ Subscription update failed, status: 0x%" PRIx32, 
+                     static_cast<uint32_t>(aStatus.mStatus));
             return;
         }
 
         bool is_open = false;
-        // Standard Matter TLV reading pattern: step over tag, then read value
-        CHIP_ERROR err_read = aReader->Next();
-        if (err_read != CHIP_NO_ERROR) {
-             ESP_LOGE(TAG_BIND, "⚠️ Failed to advance TLV reader");
-             return;
-        }
         
-        err_read = aReader->Get(is_open);
+        CHIP_ERROR err_read = aReader->Get(is_open);
+		is_open = !is_open; 
         if (err_read != CHIP_NO_ERROR) {
-            ESP_LOGE(TAG_BIND, "⚠️ Failed to read state value");
+            ESP_LOGE(TAG_BIND, "⚠️ Failed to read attribute value: %s (TLV type: %d)", 
+                     ErrorStr(err_read), aReader->GetType());
             return;
         }
 
@@ -215,27 +213,32 @@ public:
             chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
             &current_pos);
     
-        if (err == ESP_OK && current_pos.type == ESP_MATTER_VAL_TYPE_UINT16) {
-            uint16_t current = current_pos.val.u16;
-            if (current != position) {
-                esp_matter_attr_val_t new_val = esp_matter_int16(position);
-                err = esp_matter::attribute::set_val(switch_endpoint_id,
-                    chip::app::Clusters::WindowCovering::Id,
-                    chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
-                    &new_val);
-                
-                if (err == ESP_OK) {
-                    ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", position);
-                } else {
-                    ESP_LOGE(TAG_BIND, "❌ Failed to update window covering: %d", err);
-                }
-            } else {
-                ESP_LOGI(TAG_BIND, "ℹ️ Position unchanged (%d%%), skipping update", position);
-            }
-        } else {
-            ESP_LOGE(TAG_BIND, "⚠️ Failed to get current position or type mismatch");
-        }
+        if (err == ESP_OK) {
+			if (current_pos.type == ESP_MATTER_VAL_TYPE_UINT16) {
+				uint16_t current = current_pos.val.u16;
+				if (current != position) {
+					esp_matter_attr_val_t new_val = esp_matter_int16(position);
+					err = esp_matter::attribute::set_val(switch_endpoint_id,
+						chip::app::Clusters::WindowCovering::Id,
+						chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id,
+						&new_val);
+					
+					if (err == ESP_OK) {
+						ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", position);
+					} else {
+						ESP_LOGE(TAG_BIND, "❌ Failed to update window covering: %d", err);
+					}
+				} else {
+					ESP_LOGI(TAG_BIND, "ℹ️ Position unchanged (%d%%), skipping update", position);
+				}
+			} else {
+				ESP_LOGE(TAG_BIND, "❌ Unexpected attribute type: %d", current_pos.type);
+			}
+		} else {
+			ESP_LOGE(TAG_BIND, "❌ Failed to read current position: %d", err);
+		}
     }
+
 
     virtual void OnError(CHIP_ERROR aError) override {
         ESP_LOGE(TAG_BIND, "❌ Subscription error: %s", ErrorStr(aError));
@@ -293,6 +296,57 @@ static void app_client_group_callback(uint8_t fabric_index,
     (void)fabric_index; 
     (void)req_handle; 
     (void)priv_data;
+}
+
+/* ------------------------------------------------------------------
+ * Helper to revive subscriptions for existing bindings on startup
+ * ------------------------------------------------------------------ */
+static void revive_existing_bindings(void) {
+    ESP_LOGI(TAG_BIND, "🔄 Reviving existing binding subscriptions from NVS...");
+    
+    // Get the table instance (this is already loaded from NVS by this point)
+    chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
+    size_t count = table.Size();
+    ESP_LOGI(TAG_BIND, "🔄 There are %i entries stored in the nvs binding table storage.", count);
+    for (size_t i = 0; i < count; i++) {
+        chip::app::Clusters::Binding::TableEntry entry = table.GetAt(i);
+        
+        // Only process unicast bindings
+        if (entry.type != chip::app::Clusters::Binding::MATTER_UNICAST_BINDING) continue;
+        
+        uint32_t target_cluster = entry.clusterId.has_value() ? entry.clusterId.value() : 0;
+        
+        // Match the same criteria as your kBindingsChangedViaCluster handler
+        bool is_contact_binding = (target_cluster == chip::app::Clusters::BooleanState::Id ||
+                                   target_cluster == chip::app::Clusters::OnOff::Id ||
+                                   !entry.clusterId.has_value()); // Blank cluster ID fallback
+        
+        if (is_contact_binding) {
+            ESP_LOGI(TAG_BIND, "   Reviving binding: Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32, 
+                     (unsigned long long)entry.nodeId, entry.remote, target_cluster);
+            
+            // Allocate request handle to register as a pending subscription
+            esp_matter::client::request_handle_t *req_handle = chip::Platform::New<esp_matter::client::request_handle_t>();
+            if (!req_handle) {
+                ESP_LOGW(TAG_BIND, "   ⚠️ Failed to allocate request handle");
+                continue;
+            }
+            
+            req_handle->type = esp_matter::client::SUBSCRIBE_ATTR;
+            req_handle->attribute_path.mEndpointId = entry.remote;
+            req_handle->attribute_path.mClusterId = chip::app::Clusters::BooleanState::Id;
+            req_handle->attribute_path.mAttributeId = 0x0000; // StateValue
+            req_handle->request_data = nullptr;
+            
+            // Trigger the exact same callback chain that a new binding would use.
+            // The esp-matter Binding Manager will handle the CASE session handshake.
+            esp_err_t err = esp_matter::client::cluster_update(0, req_handle);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG_BIND, "   ❌ Failed to trigger cluster_update: %d", err);
+                chip::Platform::Delete(req_handle);
+            }
+        }
+    }
 }
 
 static esp_err_t start_remote_subscription(chip::app::Clusters::Binding::TableEntry entry) {
@@ -381,98 +435,62 @@ static void connection_success_callback(esp_matter::client::peer_device_t *peer_
     }
 }
 
-// Helper to scan binding table and process BooleanState bindings
-/*
-static void process_bindings_changed(void) {
-    chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
-    size_t count = table.Size();
-    
-    ESP_LOGI(TAG_BIND, "📋 Scanning binding table (%zu entries)", count);
-    
-    bool found_contact_binding = false;
-    
-    for (size_t i = 0; i < count; i++) {
-        chip::app::Clusters::Binding::TableEntry entry = table.GetAt(i);
-        
-        // Check if it's a contact sensor binding (BooleanState, On/Off, or blank fallback)
-        bool is_contact_binding = false;
-        uint32_t target_cluster = entry.clusterId.has_value() ? entry.clusterId.value() : 0x0;
-
-        ESP_LOGI(TAG_BIND, "   Binding[%zu]: Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32 "", 
-                 i, (unsigned long long)entry.nodeId, entry.remote, target_cluster);
-
-        if (target_cluster == chip::app::Clusters::BooleanState::Id ||
-            target_cluster == chip::app::Clusters::OnOff::Id ||
-            !entry.clusterId.has_value()) { // Blank/Zero cluster ID fallback
-            is_contact_binding = true;
-            ESP_LOGI(TAG_BIND, "✅ Found contact sensor binding!");
-        }
-
-        if (is_contact_binding) {
-            esp_err_t err = start_remote_subscription(entry);
-            if (err == ESP_OK) {
-                found_contact_binding = true;
-            } else {
-                ESP_LOGE(TAG_BIND, "❌ Failed to start subscription for this binding");
-            }
-            break; // Only support one contact sensor binding for now
-        }
-    }
-    
-    if (!found_contact_binding) {
-        ESP_LOGI(TAG_BIND, "ℹ️ No valid contact sensor bindings found in table");
-        s_contact_sensor_bound = false;
-    } else {
-        s_contact_sensor_bound = true;
-    }
-}
-*/
-
 /* ================================================================
 Event callback with improved binding handling
 ================================================================ */
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 	switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
-		ESP_LOGI(TAG, "🌐 IP Address Changed");
+		ESP_LOGI(TAG_EVENT, "🌐 IP Address Changed");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
-		ESP_LOGI(TAG, "✅ Commissioning complete");
+		ESP_LOGI(TAG_EVENT, "✅ Commissioning complete");
 		event_stage = 2;
 		led_indicator_set_color(&led_indicator_subsystem, 0, 255, 0); // green
 		
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
-		ESP_LOGI(TAG, "❌ Commissioning failed, fail safe timer expired");
+		ESP_LOGI(TAG_EVENT, "❌ Commissioning failed, fail safe timer expired");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
-		ESP_LOGI(TAG, "🔧 Commissioning session started");
+		ESP_LOGI(TAG_EVENT, "🔧 Commissioning session started");
 		event_stage = 1;
 		led_indicator_set_color(&led_indicator_subsystem, 0, 16, 16); // dim blue
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
-		ESP_LOGI(TAG, "🔒 Commissioning session stopped");
+		ESP_LOGI(TAG_EVENT, "🔒 Commissioning session stopped");
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
-		ESP_LOGI(TAG, "🪟 Commissioning window opened");
+		ESP_LOGI(TAG_EVENT, "🪟 Commissioning window opened");
 		event_stage = 0;
 		led_indicator_set_color(&led_indicator_subsystem, 0, 0, 128); // blue
 		break;
 
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
-		ESP_LOGI(TAG, "🔒 Commissioning window closed");
+		ESP_LOGI(TAG_EVENT, "🔒 Commissioning window closed");
 		if (event_stage == 0) {
 			led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
 		}
 		break;
+
+	case chip::DeviceLayer::DeviceEventType::kServerReady:
+		ESP_LOGI(TAG_EVENT, "💡 Matter stack initialized, reviving bindings...");
+		chip::DeviceLayer::PlatformMgr().ScheduleWork([](intptr_t arg) {
+			(void)arg;
+			// Give the esp-matter framework ~500ms to finish its internal NVS load
+			vTaskDelay(pdMS_TO_TICKS(1000));
+			ESP_LOGI(TAG_EVENT, "Initializing binding manager and reviving existing bindings...");
+			revive_existing_bindings();
+		});
+		break;
 		
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
-		ESP_LOGI(TAG_BIND, "🔄 Bindings changed via cluster");
+		ESP_LOGI(TAG_EVENT, "🔄 Bindings changed via cluster");
 		
 		chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
 			for (auto iter = table.begin(); iter != table.end(); ++iter) {
@@ -495,14 +513,14 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 				}
 				
 				if (is_contact_binding) {
-					ESP_LOGI(TAG_BIND, "✅ Found contact binding. Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32, 
+					ESP_LOGI(TAG_EVENT, "✅ Found contact binding. Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32, 
 							(unsigned long long)entry.nodeId, entry.remote, target_cluster);
 					
 					// Create a request handle to trigger the callback
 					esp_matter::client::request_handle_t *req_handle = 
 						chip::Platform::New<esp_matter::client::request_handle_t>();
 					if (!req_handle) {
-						ESP_LOGE(TAG_BIND, "❌ Failed to allocate request handle");
+						ESP_LOGE(TAG_EVENT, "❌ Failed to allocate request handle");
 						break;
 					}
 					
@@ -520,7 +538,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 						req_handle
 					);
 					if (err != ESP_OK) {
-						ESP_LOGE(TAG_BIND, "❌ Failed to notify bound cluster changed: %d", err);
+						ESP_LOGE(TAG_EVENT, "❌ Failed to notify bound cluster changed: %d", err);
 						chip::Platform::Delete(req_handle);
 					}
 				}
@@ -530,12 +548,14 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 		break;
     
 	case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
-		ESP_LOGI(TAG_BIND, "🗑️ Fabric removed, clearing bindings");
+		ESP_LOGI(TAG_EVENT, "🗑️ Fabric removed, clearing bindings");
 		s_contact_sensor_bound = false;
 		break;
-		
+	case chip::DeviceLayer::DeviceEventType::kBLEDeinitialized:
+        ESP_LOGI(TAG_EVENT, "BLE deinitialized and memory reclaimed");
+        break;
     default:
-        ESP_LOGI(TAG, "ℹ️ Unhandled event %d", static_cast<int>(event->Type));
+        ESP_LOGI(TAG_EVENT, "ℹ️ Unhandled event %d", static_cast<int>(event->Type));
         break;
     }
 }
@@ -625,7 +645,6 @@ extern "C" void app_main() {
 	}
 
 	esp_matter::client::binding_manager_init();
-	
 	err = esp_matter::start(app_event_cb, (intptr_t)0);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to start Matter, err:%d", err));
 }
