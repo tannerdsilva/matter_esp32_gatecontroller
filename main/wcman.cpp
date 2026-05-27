@@ -3,6 +3,8 @@
 
 static const char *TAG = "WC_MANAGER";
 
+extern uint16_t switch_endpoint_id;
+
 /* ------------------------------------------------------------------ */
 /*  Extern declarations for motor relay (defined in app_driver.cpp)    */
 /* ------------------------------------------------------------------ */
@@ -19,7 +21,12 @@ CHIP_ERROR MyWindowCoveringManager::HandleMovement(WindowCoveringType type) {
     if (type != WindowCoveringType::Lift) {
         return CHIP_NO_ERROR;  // Only Lift supported — gate only
     }
+ 
+	OperationalState current_op = OperationalStateGet(switch_endpoint_id, OperationalStatus::kLift);
+    bool is_opening = (current_op == OperationalState::MovingUpOrOpen);
     
+    ESP_LOGI(TAG, "🔄 Direction: %s", is_opening ? "OPENING" : "CLOSING");
+
     // Pulse the relay — the hardware interprets this as a move command
     motor_relay_toggle();
     

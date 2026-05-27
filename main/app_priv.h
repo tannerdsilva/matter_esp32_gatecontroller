@@ -29,14 +29,14 @@ void motor_relay_toggle(void);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
-    {                                                                                   \
-        .radio_mode = RADIO_MODE_NATIVE,                                                \
-    }
+	{ \
+		.radio_mode = RADIO_MODE_NATIVE, \
+	}
 
-#define ESP_OPENTHREAD_DEFAULT_HOST_CONFIG()                                            \
-    {                                                                                   \
-        .host_connection_mode = HOST_CONNECTION_MODE_NONE,                              \
-    }
+#define ESP_OPENTHREAD_DEFAULT_HOST_CONFIG() \
+	{ \
+		.host_connection_mode = HOST_CONNECTION_MODE_NONE, \
+	}
 
 #define ESP_OPENTHREAD_DEFAULT_PORT_CONFIG()                                            \
     {                                                                                   \

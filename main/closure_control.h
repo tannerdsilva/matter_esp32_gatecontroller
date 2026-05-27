@@ -1,9 +1,29 @@
-// #ifdef CONFIG_MODE_PRIMARY_CLOSURE
 #pragma once
 
 #include <esp_matter.h>
 #include <esp_matter_core.h>
+#include <app/clusters/closure-control-server/closure-control-cluster-delegate.h>
 
-esp_matter::endpoint_t *endpoint_create_closure(esp_matter::node_t *node);
+namespace chip {
+namespace app {
+namespace Clusters {
+namespace ClosureControl {
 
-// #endif // CONFIG_MODE_PRIMARY_CLOSURE
+class MyClosureDelegate : public DelegateBase {
+public:
+    Protocols::InteractionModel::Status HandleStopCommand() override;
+    Protocols::InteractionModel::Status HandleMoveToCommand(
+        const Optional<TargetPositionEnum> & position,
+        const Optional<bool> & latch,
+        const Optional<Globals::ThreeLevelAutoEnum> & speed) override;
+    Protocols::InteractionModel::Status HandleCalibrateCommand() override;
+    bool IsReadyToMove() override;
+    ElapsedS GetCalibrationCountdownTime() override;
+    ElapsedS GetMovingCountdownTime() override;
+    ElapsedS GetWaitingForMotionCountdownTime() override;
+};
+
+} // namespace ClosureControl
+} // namespace Clusters
+} // namespace app
+} // namespace chip
