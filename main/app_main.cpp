@@ -25,8 +25,8 @@
 
 #include "wcman.h"
 #include "subscription_manager.h"
+#include "close_duration.h"
 
-// led indicator support
 #include "led_indicator.hpp"
 led_indicator_subsystem_t led_indicator_subsystem;
 
@@ -56,16 +56,14 @@ static esp_matter::endpoint_t* s_cover_endpoint = nullptr;
 using namespace esp_matter::client;
 
 static chip::app::Clusters::WindowCovering::MyWindowCoveringManager s_cover_delegate;
+uint32_t s_closing_start_ms = 0;
+bool s_is_closing_active = false;
 
 static const char *TAG_ENDPOINT_INIT = "ENDPOINT_INIT";
-static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node)
-{
+static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node) {
 	esp_err_t err = ESP_OK;
 	esp_matter::endpoint_t *endpoint = nullptr;
 	
-	/* ---------------------------------------------------------------
-	1. Create the endpoint (no flags, no priv_data for now)
-	--------------------------------------------------------------- */
 	endpoint = esp_matter::endpoint::create(node, 0, nullptr);
 	if (endpoint == nullptr) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create endpoint");
@@ -73,140 +71,113 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 	}
 	ESP_LOGI(TAG_ENDPOINT_INIT, "endpoint created (internal ID: %d)", esp_matter::endpoint::get_id(endpoint));
 	
-	/* ---------------------------------------------------------------
-	2. Add the Window Covering device type to this endpoint
-		DeviceType ID = 0x0202, Version = 5
-	--------------------------------------------------------------- */
-	err = esp_matter::endpoint::add_device_type(
-		endpoint,
-		ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID,
-		ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
+	err = esp_matter::endpoint::add_device_type(endpoint, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to add device type: %d", err);
 		return err;
 	}
 	ESP_LOGI(TAG_ENDPOINT_INIT, "device type 0x%04X v%d added", ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	
-	/* ---------------------------------------------------------------
-	3. Create the Descriptor Server cluster (mandatory on every endpoint)
-		This populates: deviceTypeList, serverList, clientList, partsList
-	--------------------------------------------------------------- */
 	esp_matter::cluster::descriptor::config_t descriptor_config;
 	esp_matter::cluster::descriptor::create(endpoint, &descriptor_config, esp_matter::CLUSTER_FLAG_SERVER);
 	ESP_LOGI(TAG_ENDPOINT_INIT, "descriptor cluster created");
 	
-	/* ---------------------------------------------------------------
-	4. Create the Identify Server cluster
-		Required by the Matter spec for all endpoints that are not
-		part of the root node. We use a 10-second identify time.
-	--------------------------------------------------------------- */
 	esp_matter::cluster::identify::config_t identify_config;
-	identify_config.identify_time = 10;                    // 10 seconds
+	identify_config.identify_time = 10;		// 10 seconds
 	identify_config.identify_type = chip::to_underlying(chip::app::Clusters::Identify::IdentifyTypeEnum::kActuator);
 	esp_matter::cluster::identify::create(endpoint, &identify_config, esp_matter::CLUSTER_FLAG_SERVER);
 	ESP_LOGI(TAG_ENDPOINT_INIT, "identify cluster created (10s timeout)");
 	
-	/* ---------------------------------------------------------------
-	5. Create the Groups Server cluster
-		Required for scene management support. Minimal config is fine.
-	--------------------------------------------------------------- */
 	esp_matter::cluster::common::config_t groups_config;
 	esp_matter::cluster::groups::create(endpoint, &groups_config, esp_matter::CLUSTER_FLAG_SERVER);
 	ESP_LOGI(TAG_ENDPOINT_INIT, "groups cluster created");
 	
-	/* ================================================================
-	6. Create the Window Covering Server cluster — line by line
-	================================================================ */
-	
-	// 6a. Build the window covering configuration struct
-	// Constructor sets end_product_type at construction time (it's const)
 	esp_matter::cluster::window_covering::config_t wc_config(0);
-	
-	// 6b. Set type to Lift (0x00) — most appropriate for a gate/door
-	// The spec only defines: 0=Lift, 1=Tilt, 2=Reserved
+
 	wc_config.type = 0x00;
 	
-	// 6c. Configure feature flags:
-	//     0x0001 = kLift          — basic lift capability
-	//     0x0002 = kPositionAwareLift — target & current position attributes
-	//     Together these two features are REQUIRED for HandleMovement() to fire.
-	wc_config.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift | (uint32_t)chip::app::Clusters::WindowCovering::Feature::kPositionAwareLift;
+	wc_config.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift;
 	
-	// 6d. Configure Position Aware Lift feature attributes (mandatory when that bit is set)
-	// nullable<T> is a global template class, not in esp_matter namespace
-	wc_config.features.position_aware_lift.target_position_lift_percent_100ths = nullable<uint16_t>(0);
-	wc_config.features.position_aware_lift.current_position_lift_percent_100ths = nullable<uint16_t>(0);
+// 	wc_config.features.position_aware_lift.target_position_lift_percent_100ths = nullable<uint16_t>(0);
+// 	wc_config.features.position_aware_lift.current_position_lift_percent_100ths = nullable<uint16_t>(0);
 	
-	// 6e. Assign our delegate — this is the critical link to your HandleMovement()
 	wc_config.delegate = &s_cover_delegate;
 	
-	// 6f. Create the cluster with the fully configured struct
 	esp_matter::cluster::window_covering::create(endpoint, &wc_config, esp_matter::CLUSTER_FLAG_SERVER);
 	ESP_LOGI(TAG_ENDPOINT_INIT, "window Covering cluster created (feature flags = 0x%" PRIx32 ")", wc_config.feature_flags);
 	
-	/* ---------------------------------------------------------------
-	7. Store the endpoint ID and handle for later use
-	--------------------------------------------------------------- */
 	switch_endpoint_id = esp_matter::endpoint::get_id(endpoint);
 	s_cover_endpoint = endpoint;
 	return ESP_OK;
 }
 
 
-/*
-================================================================
-Remote Boolean State subscription (existing code, unchanged)
-================================================================
-*/
-
 void set_window_covering_to_unknown(uint16_t endpoint_id) {
-    // 1. Create a Nullable value. 
-    // The default constructor initializes it to "Null" (unknown).
-    chip::app::DataModel::Nullable<chip::Percent100ths> unknown_position;
-    
-    // 2. Apply the change using the Window Covering cluster's internal setter.
-    // This safely updates CurrentPositionLiftPercent100ths, LiftPercentage, and Lift.
-    chip::app::Clusters::WindowCovering::LiftPositionSet(endpoint_id, unknown_position);
-    
-    ESP_LOGI(TAG, "⚠️ Window covering position set to UNKNOWN (null)");
+	chip::app::DataModel::Nullable<chip::Percent100ths> unknown_position;
+	
+	chip::app::Clusters::WindowCovering::LiftPositionSet(endpoint_id, unknown_position);
+	
+	ESP_LOGI(TAG, "⚠️ Window covering position set to UNKNOWN (null)");
 }
 
 static esp_timer_handle_t s_retry_timer = NULL;
 
 class BooleanStateReadCallback : public chip::app::ReadClient::Callback {
 public:
-    virtual void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
+	virtual void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
 		ESP_LOGI(TAG_BIND, "✅ Subscription established to remote contact sensor");
 		subscription_manager_on_subscription_established();
-    }
+	}
 
-    virtual void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
-        if (aStatus.mStatus != chip::Protocols::InteractionModel::Status::Success) {
-            ESP_LOGE(TAG_BIND, "⚠️ Subscription update failed, status: 0x%" PRIx32, static_cast<uint32_t>(aStatus.mStatus));
-            subscription_manager_on_subscription_failed();
-            return;
+	virtual void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
+		if (aStatus.mStatus != chip::Protocols::InteractionModel::Status::Success) {
+			ESP_LOGE(TAG_BIND, "⚠️ Subscription update failed, status: 0x%" PRIx32, static_cast<uint32_t>(aStatus.mStatus));
+			subscription_manager_on_subscription_failed();
+			return;
+		}
+
+		bool is_closed = false;
+		
+		CHIP_ERROR err_read = aReader->Get(is_closed);
+		if (err_read != CHIP_NO_ERROR) {
+			ESP_LOGE(TAG_BIND, "⚠️ Failed to read attribute value: %s (TLV type: %d)", ErrorStr(err_read), aReader->GetType());
+			return;
+		}
+
+        // BooleanState StateValue=true means the contact is Closed (magnet engaged)
+        uint8_t percentage = is_closed ? 0 : 100; 
+        ESP_LOGI(TAG_BIND, "📡 Contact sensor changed: %s (pos=%d%%)", is_closed ? "CLOSED" : "OPEN", percentage);
+        
+        // Record closure duration if we were closing and now sealed shut
+        if (is_closed && s_is_closing_active && s_closing_start_ms != 0) {
+            uint32_t close_end_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (close_duration_add(s_closing_start_ms, close_end_ms)) {
+                ESP_LOGI(TAG_BIND, "✅ Close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
+            } else {
+                ESP_LOGW(TAG_BIND, "⚠️ Close duration outside bounds (5-60s), ignored");
+            }
+            s_is_closing_active = false;
+        }
+        
+        // Clear closing state if door is opened
+        if (!is_closed) {
+            s_is_closing_active = false;
+            s_closing_start_ms = 0;
         }
 
-        bool is_open = false;
-        
-        CHIP_ERROR err_read = aReader->Get(is_open);
-        if (err_read != CHIP_NO_ERROR) {
-            ESP_LOGE(TAG_BIND, "⚠️ Failed to read attribute value: %s (TLV type: %d)", ErrorStr(err_read), aReader->GetType());
-            return;
-        }
+        // ✅ Update the "Basic Lift" percentage attribute (0% to 100%)
+        esp_matter_attr_val_t new_pos = esp_matter_uint8(percentage);
+        esp_err_t err = esp_matter::attribute::set_val(
+            switch_endpoint_id,
+            chip::app::Clusters::WindowCovering::Id,
+            chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercentage::Id,
+            &new_pos
+        );
 
-        uint16_t position = is_open ? 10000 : 0;
-        ESP_LOGI(TAG_BIND, "📡 Contact sensor changed: %s (pos=%d%%)", is_open ? "OPEN" : "CLOSED", position);
-        
-        // ✅ Set position via the cluster's internal setter (CurrentPositionLiftPercent100ths is read-only)
-        chip::app::DataModel::Nullable<chip::Percent100ths> newPos{position};
-        chip::app::Clusters::WindowCovering::LiftPositionSet(switch_endpoint_id, newPos);
+        // ✅ Update operational state to Stall (not moving)
         chip::app::Clusters::WindowCovering::OperationalStateSet(switch_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
-        ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", position);
-        
-        
+        ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", percentage);
     }
-
 
     virtual void OnError(CHIP_ERROR aError) override {
         ESP_LOGE(TAG_BIND, "❌ Subscription error: %s", ErrorStr(aError));

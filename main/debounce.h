@@ -10,5 +10,3 @@ bool debounce_check(void);
 /* Unconditionally set the stored timestamp to current time.
  * Useful for "resetting" the debounce window on demand. */
 void debounce_reset(void);
-
-#endif // DEBOUNCE_H
