@@ -147,9 +147,7 @@ static void app_driver_button_toggle_cb(void *arg, void *data) {
 }
 
 // Stub for client subscribe callback
-static void app_driver_client_callback(client::peer_device_t *peer_device, 
-                                       client::request_handle_t *req_handle, 
-                                       void *priv_data) {
+static void app_driver_client_callback(client::peer_device_t *peer_device, client::request_handle_t *req_handle, void *priv_data) {
 	ESP_LOGI(TAG_CLIENT, "Client callback triggered");
     (void)peer_device;
     (void)req_handle;
@@ -157,9 +155,7 @@ static void app_driver_client_callback(client::peer_device_t *peer_device,
 }
 
 // Stub for group invoke callback
-static void app_driver_client_group_invoke_command_callback(uint8_t fabric_index,
-                                                            client::request_handle_t *req_handle,
-                                                            void *priv_data) {
+static void app_driver_client_group_invoke_command_callback(uint8_t fabric_index, client::request_handle_t *req_handle, void *priv_data) {
     (void)fabric_index;
     (void)req_handle;
     (void)priv_data;

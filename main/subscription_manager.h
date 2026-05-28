@@ -2,6 +2,7 @@
 
 #include <esp_err.h>
 #include <esp_matter.h>
+#include <stdint.h> // For PRIu32/PRIx64 if not pulled in automatically
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include "esp_openthread_types.h"
@@ -28,8 +29,12 @@ typedef struct {
 	uint32_t cluster_id;
 	subscription_state_t state;
 	int retry_count;
-	uint32_t last_failure_time;				// ms since boot
+	uint32_t last_failure_time;
+	uint64_t last_state_change_ms;
 } subscription_binding_t;
+
+// start the watchdog task
+void subscription_manager_start_watchdog(void);
 
 // initialize the subscription manager
 void subscription_manager_init(void);
@@ -48,4 +53,3 @@ void subscription_manager_on_subscription_established(void);
 
 // call periodically (or from a task) to retry failed subscriptions
 void subscription_manager_retry_pending(void);
-

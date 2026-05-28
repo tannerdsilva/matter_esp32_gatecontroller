@@ -159,6 +159,18 @@ Remote Boolean State subscription (existing code, unchanged)
 ================================================================
 */
 
+void set_window_covering_to_unknown(uint16_t endpoint_id) {
+    // 1. Create a Nullable value. 
+    // The default constructor initializes it to "Null" (unknown).
+    chip::app::DataModel::Nullable<chip::Percent100ths> unknown_position;
+    
+    // 2. Apply the change using the Window Covering cluster's internal setter.
+    // This safely updates CurrentPositionLiftPercent100ths, LiftPercentage, and Lift.
+    chip::app::Clusters::WindowCovering::LiftPositionSet(endpoint_id, unknown_position);
+    
+    ESP_LOGI(TAG, "⚠️ Window covering position set to UNKNOWN (null)");
+}
+
 static esp_timer_handle_t s_retry_timer = NULL;
 
 class BooleanStateReadCallback : public chip::app::ReadClient::Callback {
@@ -191,6 +203,8 @@ public:
         chip::app::Clusters::WindowCovering::LiftPositionSet(switch_endpoint_id, newPos);
         chip::app::Clusters::WindowCovering::OperationalStateSet(switch_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
         ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", position);
+        
+        
     }
 
 
@@ -219,7 +233,7 @@ static void app_client_callback(esp_matter::client::peer_device_t *peer_device, 
     uint16_t min_interval = 1;
     uint16_t max_interval = 5;
     bool keep_subscription = true;
-    bool auto_resubscribe = true;
+    bool auto_resubscribe = false;
 
     esp_err_t err = esp_matter::client::interaction::subscribe::send_request(
         peer_device, 
@@ -463,6 +477,13 @@ extern "C" void app_main() {
 	err = init_binding_cluster(node);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to initialize binding cluster"));
 	
+	subscription_manager_start_watchdog();
+
+    /* ================================================================
+       Step 6: Revive existing bindings from NVS
+    ================================================================ */
+    revive_existing_bindings();
+    
 	/* ================================================================
 	Manually build the Window Covering endpoint from scratch
 	================================================================ */
