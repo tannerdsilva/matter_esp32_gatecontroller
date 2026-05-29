@@ -82,10 +82,9 @@ void subscription_manager_start_or_revive(chip::NodeId node_id, chip::EndpointId
     req_handle->request_data = nullptr;
 
     esp_err_t err = esp_matter::client::cluster_update(0, req_handle);
-    
+	chip::Platform::Delete(req_handle);    
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "❌ Failed to trigger cluster_update: %d", err);
-        chip::Platform::Delete(req_handle);
         s_current_binding.state = SUBSCRIPTION_STATE_FAILED;
         s_current_binding.last_failure_time = (uint32_t)(esp_timer_get_time() / 1000);
     } else {

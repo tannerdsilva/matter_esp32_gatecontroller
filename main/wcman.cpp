@@ -18,7 +18,8 @@ extern uint8_t s_last_known_position;
 /* ------------------------------------------------------------------ */
 /*  Extern declarations for motor relay (defined in app_driver.cpp)    */
 /* ------------------------------------------------------------------ */
-extern void motor_relay_toggle(void);
+extern void motor_relay_toggle_async(void);
+extern void motor_relay_stop_immediate(void);
 
 using namespace chip;
 using namespace chip::app::Clusters::WindowCovering;
@@ -48,7 +49,7 @@ CHIP_ERROR MyWindowCoveringManager::HandleMovement(WindowCoveringType type) {
              chip::to_underlying(newState));
 
     // Toggle the hardware relay
-    motor_relay_toggle();
+    motor_relay_toggle_async();
 
     return CHIP_NO_ERROR;
 }
@@ -56,7 +57,7 @@ CHIP_ERROR MyWindowCoveringManager::HandleMovement(WindowCoveringType type) {
 CHIP_ERROR MyWindowCoveringManager::HandleStopMotion(void) {
     ESP_LOGI(TAG, "HandleStopMotion");
     
-    motor_relay_toggle();
+    motor_relay_toggle_async();
     
     // Update operational status back to Stall via proper API
     OperationalStateSet(switch_endpoint_id, OperationalStatus::kLift, 

@@ -26,70 +26,62 @@ static const char *TAG = "DRIVER";
 static const char *TAG_CLIENT = "CLIENT";
 
 /* ------------------------------------------------------------------ */
-/*  Motor relay — single GPIO, momentary pulse                         */
+/*  Motor relay — single GPIO, non-blocking pulse via esp_timer       */
 /* ------------------------------------------------------------------ */
 #define MOTOR_RELAY_GPIO    GPIO_NUM_1
 #define MOTOR_RELAY_PULSE_MS 500        /* ms the relay is held active     */
-#define RELAY_HALF_PULSE_MS  600         /* half-cycle for "open"/"close"   */
-#define STARTUP_ANIM_DELAY_MS 3000       /* total animation duration ~3s    */
 
-/* ------------------------------------------------------------------ */
-/*  Startup animation: simulates opening then closing for ~3 seconds    */
-/* ------------------------------------------------------------------ */
-static void motor_relay_startup_animation(void)
-{
-    ESP_LOGI(TAG, "=== Starting motor relay self-test animation ===");
-    
-    // Phase 1: "Open" — pulse relay to move toward open position
-    gpio_set_level(MOTOR_RELAY_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(RELAY_HALF_PULSE_MS));
+static esp_timer_handle_t s_motor_timer = NULL;
+
+/** Timer callback: turns relay OFF after pulse duration */
+static void motor_timer_callback(void *arg) {
+    (void)arg;
     gpio_set_level(MOTOR_RELAY_GPIO, 0);
-    ESP_LOGI(TAG, "  [anim] Opening...");
-    
-    // Pause to let the "gate" reach fully open position
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    // Phase 2: "Close" — pulse relay to move toward closed position
-    gpio_set_level(MOTOR_RELAY_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(RELAY_HALF_PULSE_MS));
-    gpio_set_level(MOTOR_RELAY_GPIO, 0);
-    ESP_LOGI(TAG, "  [anim] Closing...");
-    
-    // Pause to let the "gate" reach fully closed position
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    // Finalize at closed state (position = 0)
-    gpio_set_level(MOTOR_RELAY_GPIO, 0);
-    ESP_LOGI(TAG, "  [anim] Complete — defaulting to CLOSED (0%%)");
 }
 
-static void motor_relay_init(void)
+/** Initialize motor relay GPIO and create the timer */
+void motor_relay_init(void)
 {
-    // Note: gpio_config_t fields must be in declaration order!
     gpio_config_t io_conf = {
-        .pin_bit_mask   = (1ULL << MOTOR_RELAY_GPIO),  // First field
-        .mode           = GPIO_MODE_OUTPUT,            // Second field
-        .pull_up_en     = GPIO_PULLUP_DISABLE,         // Third field
-        .pull_down_en   = GPIO_PULLDOWN_DISABLE,       // Fourth field
-        .intr_type      = GPIO_INTR_DISABLE,           // Fifth field
+        .pin_bit_mask   = (1ULL << MOTOR_RELAY_GPIO),
+        .mode           = GPIO_MODE_OUTPUT,
+        .pull_up_en     = GPIO_PULLUP_DISABLE,
+        .pull_down_en   = GPIO_PULLDOWN_DISABLE,
+        .intr_type      = GPIO_INTR_DISABLE,
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
     gpio_set_level(MOTOR_RELAY_GPIO, 0);
-    
-    // Run startup animation before marking init complete
-    motor_relay_startup_animation();
-    
-    ESP_LOGI(TAG, "Motor relay initialised on GPIO %d (%d ms pulse)",
+
+    esp_timer_create_args_t timer_cfg = {
+        .callback = motor_timer_callback,
+        .name     = "motor_pulse",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_cfg, &s_motor_timer));
+
+    ESP_LOGI("DRIVER", "Motor relay initialized on GPIO %d (%d ms pulse)",
              MOTOR_RELAY_GPIO, MOTOR_RELAY_PULSE_MS);
 }
 
-void motor_relay_toggle(void)
+/** Start a non-blocking motor pulse. Turns HIGH now, LOW after pulse duration. */
+void motor_relay_toggle_async(void)
 {
+    if (!s_motor_timer) return;
+
     gpio_set_level(MOTOR_RELAY_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(MOTOR_RELAY_PULSE_MS));
-    gpio_set_level(MOTOR_RELAY_GPIO, 0);
-    ESP_LOGI(TAG, "Motor relay toggled (%d ms pulse)", MOTOR_RELAY_PULSE_MS);
+    esp_timer_start_once(s_motor_timer, MOTOR_RELAY_PULSE_MS * 1000ULL);
+    ESP_LOGI("DRIVER", "Motor relay toggled (async %d ms pulse)", MOTOR_RELAY_PULSE_MS);
 }
+
+/** Cancel any pending pulse and turn relay OFF immediately */
+void motor_relay_stop_immediate(void)
+{
+    if (!s_motor_timer) return;
+
+    esp_timer_stop(s_motor_timer);
+    gpio_set_level(MOTOR_RELAY_GPIO, 0);
+    ESP_LOGI("DRIVER", "Motor relay stopped (immediate)");
+}
+
 
 /* ------------------------------------------------------------------ */
 /*  Matter / button driver                                             */
@@ -123,7 +115,7 @@ static void app_driver_button_toggle_cb(void *arg, void *data) {
     esp_matter_attr_val_t pos_val;
     esp_err_t err = esp_matter::attribute::get_val(switch_endpoint_id, 
         chip::app::Clusters::WindowCovering::Id, 
-        chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id, 
+        chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercentage::Id, 
         &pos_val);
         
     if (err == ESP_OK && pos_val.type == ESP_MATTER_VAL_TYPE_UINT16) {
@@ -143,7 +135,7 @@ static void app_driver_button_toggle_cb(void *arg, void *data) {
     }
     
     // Pulse the relay
-    motor_relay_toggle();
+//     motor_relay_toggle();
 }
 
 // Stub for client subscribe callback

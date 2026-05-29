@@ -101,10 +101,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 	wc_config.type = 0x00;
 	
 	wc_config.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift;
-	
-// 	wc_config.features.position_aware_lift.target_position_lift_percent_100ths = nullable<uint16_t>(0);
-// 	wc_config.features.position_aware_lift.current_position_lift_percent_100ths = nullable<uint16_t>(0);
-	
+		
 	wc_config.delegate = &s_cover_delegate;
 	
 	esp_matter::cluster::window_covering::create(endpoint, &wc_config, esp_matter::CLUSTER_FLAG_SERVER);
@@ -131,12 +128,14 @@ public:
 	virtual void OnSubscriptionEstablished(chip::SubscriptionId aSubscriptionId) override {
 		ESP_LOGI(TAG_BIND, "✅ Subscription established to remote contact sensor");
 		subscription_manager_on_subscription_established();
+		led_indicator_set_color(&led_indicator_subsystem, 0, 32, 0);
 	}
 
 	virtual void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
 		if (aStatus.mStatus != chip::Protocols::InteractionModel::Status::Success) {
 			ESP_LOGE(TAG_BIND, "⚠️ Subscription update failed, status: 0x%" PRIx32, static_cast<uint32_t>(aStatus.mStatus));
 			subscription_manager_on_subscription_failed();
+			led_indicator_set_color(&led_indicator_subsystem, 255, 128, 0);
 			return;
 		}
 
@@ -148,20 +147,20 @@ public:
 			return;
 		}
 
-        // BooleanState StateValue=true means the contact is Closed (magnet engaged)
-        uint8_t percentage = is_closed ? 0 : 100; 
-        ESP_LOGI(TAG_BIND, "📡 Contact sensor changed: %s (pos=%d%%)", is_closed ? "CLOSED" : "OPEN", percentage);
-        
-        // Record closure duration if we were closing and now sealed shut
-        if (is_closed && s_is_closing_active && s_closing_start_ms != 0) {
-            uint32_t close_end_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            if (close_duration_add(s_closing_start_ms, close_end_ms)) {
-                ESP_LOGI(TAG_BIND, "✅ Close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
-            } else {
-                ESP_LOGW(TAG_BIND, "⚠️ Close duration outside bounds (5-60s), ignored");
-            }
-            s_is_closing_active = false;
-        }
+		// BooleanState StateValue=true means the contact is Closed (magnet engaged)
+		uint8_t percentage = is_closed ? 100 : 0; 
+		ESP_LOGI(TAG_BIND, "📡 Contact sensor changed: %s (pos=%d%%)", is_closed ? "CLOSED" : "OPEN", percentage);
+		
+		// Record closure duration if we were closing and now sealed shut
+		if (is_closed && s_is_closing_active && s_closing_start_ms != 0) {
+			uint32_t close_end_ms = (uint32_t)(esp_timer_get_time() / 1000);
+			if (close_duration_add(s_closing_start_ms, close_end_ms)) {
+				ESP_LOGI(TAG_BIND, "✅ Close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
+			} else {
+				ESP_LOGW(TAG_BIND, "⚠️ Close duration outside bounds (5-60s), ignored");
+			}
+			s_is_closing_active = false;
+		}
         
         // Clear closing state if door is opened
         if (!is_closed) {
@@ -186,11 +185,13 @@ public:
     virtual void OnError(CHIP_ERROR aError) override {
         ESP_LOGE(TAG_BIND, "❌ Subscription error: %s", ErrorStr(aError));
         subscription_manager_on_subscription_failed();
+		led_indicator_set_color(&led_indicator_subsystem, 255, 128, 0);
     }
 
     virtual void OnDone(chip::app::ReadClient * apReadClient) override {
         ESP_LOGI(TAG_BIND, "ℹ️ Subscription ended");
         subscription_manager_on_subscription_failed();
+		led_indicator_set_color(&led_indicator_subsystem, 255, 128, 0);
     }
 };
 
@@ -337,7 +338,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 	case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
 		ESP_LOGI(TAG_EVENT, "🔒 commissioning window closed");
 		if (event_stage == 0) {
-			led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
+			// led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0); // red
 		}
 		break;
 
@@ -347,6 +348,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 			ESP_LOGI(TAG_EVENT, "initializing binding manager and reviving existing bindings...");
 			revive_existing_bindings();
 		});
+		led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0);
 		break;
 		
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {

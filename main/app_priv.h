@@ -7,10 +7,6 @@
 #include "esp_openthread_types.h"
 #endif
 
-#ifdef CONFIG_SUBSCRIBE_AFTER_BINDING
-#include "bindings_cluster.h"
-#endif
-
 typedef void *app_driver_handle_t;
 
 /** Initialize the switch driver
@@ -22,10 +18,8 @@ typedef void *app_driver_handle_t;
  */
 app_driver_handle_t app_driver_switch_init();
 
-/** Pulse the motor relay — called by window covering delegate.
- *  Drives MOTOR_RELAY_GPIO high then low after a short delay.
- */
-void motor_relay_toggle(void);
+void motor_relay_init(void);
+void motor_relay_toggle_async(void);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
