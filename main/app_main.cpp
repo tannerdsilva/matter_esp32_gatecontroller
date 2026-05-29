@@ -59,6 +59,10 @@ static chip::app::Clusters::WindowCovering::MyWindowCoveringManager s_cover_dele
 uint32_t s_closing_start_ms = 0;
 bool s_is_closing_active = false;
 
+uint32_t s_motor_start_ms = 0;
+bool s_motor_active = false;
+uint8_t s_last_known_position = 0;
+
 static const char *TAG_ENDPOINT_INIT = "ENDPOINT_INIT";
 static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node) {
 	esp_err_t err = ESP_OK;
