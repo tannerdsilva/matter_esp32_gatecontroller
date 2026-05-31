@@ -76,6 +76,13 @@ esp_matter::cluster_t *wc_identify_cluster = nullptr;
 esp_matter::cluster_t *wc_groups_cluster = nullptr;
 esp_matter::cluster_t *wc_descriptor_cluster = nullptr;
 
+esp_matter::cluster_t *wc_cluster_scratchbuilt = nullptr;
+esp_matter::attribute_t *wc_cluster_type_attribute = nullptr;
+esp_matter::attribute_t *wc_cluster_configstatus_attribute = nullptr;
+esp_matter::attribute_t *wc_cluster_operationalstatus_attribute = nullptr;
+esp_matter::attribute_t *wc_cluster_endproducttype_attribute = nullptr;
+esp_matter::attribute_t *wc_cluster_mode = nullptr;
+esp_matter::attribute_t *lift_percentage = nullptr;
 
 static esp_err_t window_covering_command_openorclose_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
 	(void)tlv_data;
@@ -87,7 +94,8 @@ static esp_err_t window_covering_command_openorclose_handler(const chip::app::Co
 	}
 	
 	if (debounce_check() == false) {
-		ESP_LOGW(TAG_HANDLER, "DEBOUNCER BLOCKING COMMAND");
+		ESP_LOGW(TAG_HANDLER, "DEBOUNCER BLOCKING COMMAND. THE DEBOUNCER WILL BE RESET.");
+		debounce_reset();
 	} else {
 		ESP_LOGI(TAG_HANDLER, "DEBOUNCER NO BLOCK");
 	}
@@ -136,6 +144,7 @@ static const char *TAG_ENDPOINT_INIT = "ENDPOINT_INIT";
 static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node) {
 	esp_err_t err = ESP_OK;
 	
+	// endpoint creation.
 	wc_endpoint = esp_matter::endpoint::create(node, 0, nullptr);
 	if (!wc_endpoint) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create new endpoint in node.");
@@ -145,6 +154,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 		ESP_LOGI(TAG_ENDPOINT_INIT, "endpoint created (internal ID: %d)", esp_matter::endpoint::get_id(wc_endpoint));
 	}
 	
+	// set the device type of the new endpoint.
 	err = esp_matter::endpoint::add_device_type(wc_endpoint, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to add device type: %d", err);
@@ -153,52 +163,143 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 		ESP_LOGI(TAG_ENDPOINT_INIT, "device type 0x%04X v%d added", ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	}
 	
+	// create the required descriptor cluster.
 	esp_matter::cluster::descriptor::config_t descriptor_config;
 	wc_descriptor_cluster = esp_matter::cluster::descriptor::create(wc_endpoint, &descriptor_config, esp_matter::CLUSTER_FLAG_SERVER);
 	if (!wc_descriptor_cluster) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create descriptor cluster");
+		return ESP_FAIL;
 	} else {
 		ESP_LOGI(TAG_ENDPOINT_INIT, "descriptor cluster created");
 	}
 	
+	// create the required identify cluster.
 	esp_matter::cluster::identify::config_t identify_config;
 	identify_config.identify_time = 10;		// 10 seconds
 	identify_config.identify_type = chip::to_underlying(chip::app::Clusters::Identify::IdentifyTypeEnum::kActuator);
 	wc_identify_cluster = esp_matter::cluster::identify::create(wc_endpoint, &identify_config, esp_matter::CLUSTER_FLAG_SERVER);
 	if (!wc_identify_cluster) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create identify cluster");
+		return ESP_FAIL;
 	} else {
 		ESP_LOGI(TAG_ENDPOINT_INIT, "identify cluster created (10s timeout)");
 	}
 	
+	// create the required groups cluster.
 	esp_matter::cluster::common::config_t groups_config;
 	wc_groups_cluster = esp_matter::cluster::groups::create(wc_endpoint, &groups_config, esp_matter::CLUSTER_FLAG_SERVER);
 	if (!wc_groups_cluster) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create groups cluster");
+		return ESP_FAIL;
 	} else {
 		ESP_LOGI(TAG_ENDPOINT_INIT, "groups cluster created");
 	}
 	
-	esp_matter::cluster_t *wc_cluster_scratchbuilt = esp_matter::cluster::create(wc_endpoint, chip::app::Clusters::WindowCovering::Id, esp_matter::CLUSTER_FLAG_SERVER);
-	
-	esp_matter::attribute_t *wc_cluster_type_attribute = esp_matter::cluster::window_covering::attribute::create_type(wc_cluster_scratchbuilt, 0);
-	esp_matter::attribute_t *wc_cluster_configstatus_attribute = esp_matter::cluster::window_covering::attribute::create_config_status(wc_cluster_scratchbuilt, 0);
-	esp_matter::attribute_t *wc_cluster_operationalstatus_attribute = esp_matter::cluster::window_covering::attribute::create_operational_status(wc_cluster_scratchbuilt, 0);
-	esp_matter::attribute_t *wc_cluster_endproducttype_attribute = esp_matter::cluster::window_covering::attribute::create_end_product_type(wc_cluster_scratchbuilt, 0);
-	esp_matter::attribute_t *wc_cluster_mode = esp_matter::cluster::window_covering::attribute::create_mode(wc_cluster_scratchbuilt, 0);
-	
-	esp_matter::attribute_t *lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, nullable<uint8_t>{});
-	
-	esp_matter::cluster::global::attribute::create_cluster_revision(wc_cluster_scratchbuilt, 5);
-	esp_matter::cluster::global::attribute::create_feature_map(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
-	
-	esp_matter::command_t *wc_cluster_upopen_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_openorclose_handler);
-	esp_matter::command_t *wc_cluster_stop_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::StopMotion::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
-	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
+	// build the window covering cluster.
+	wc_cluster_scratchbuilt = esp_matter::cluster::create(wc_endpoint, chip::app::Clusters::WindowCovering::Id, esp_matter::CLUSTER_FLAG_SERVER);
+	if (!wc_cluster_scratchbuilt) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create window covering cluster");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "window covering cluster base created");
+	}
+	wc_cluster_type_attribute = esp_matter::cluster::window_covering::attribute::create_type(wc_cluster_scratchbuilt, 0);
+	if (!wc_cluster_type_attribute) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create type attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "type attribute created");
+	}
+	wc_cluster_configstatus_attribute = esp_matter::cluster::window_covering::attribute::create_config_status(wc_cluster_scratchbuilt, 0);
+	if (!wc_cluster_configstatus_attribute) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create config status attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "config status attribute created");
+	}
 
-// 	chip::app::Clusters::WindowCovering::SetDefaultDelegate(wc_endpoint_id, &s_cover_delegate);
+	// 4. Operational Status Attribute
+	wc_cluster_operationalstatus_attribute = esp_matter::cluster::window_covering::attribute::create_operational_status(wc_cluster_scratchbuilt, 0);
+	if (!wc_cluster_operationalstatus_attribute) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create operational status attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "operational status attribute created");
+	}
+
+	// 5. End Product Type Attribute
+	wc_cluster_endproducttype_attribute = esp_matter::cluster::window_covering::attribute::create_end_product_type(wc_cluster_scratchbuilt, 0);
+	if (!wc_cluster_endproducttype_attribute) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create end product type attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "end product type attribute created");
+	}
+
+	// 6. Mode Attribute
+	wc_cluster_mode = esp_matter::cluster::window_covering::attribute::create_mode(wc_cluster_scratchbuilt, 0);
+	if (!wc_cluster_mode) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create mode attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "mode attribute created");
+	}
+
+	// 7. Lift Percentage Attribute
+	lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, nullable<uint8_t>{});
+	if (!lift_percentage) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "lift percentage attribute created");
+	}
+
+	// 8. Cluster Revision Attribute (returns esp_err_t)
+	esp_matter::cluster::global::attribute::create_cluster_revision(wc_cluster_scratchbuilt, 5);
+// 	if (err != ESP_OK) {
+// 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create cluster revision attribute");
+// 		return err;
+// 	} else {
+// 		ESP_LOGI(TAG_ENDPOINT_INIT, "cluster revision attribute created");
+// 	}
+
+	// 9. Feature Map Attribute (returns esp_err_t)
+	esp_matter::cluster::global::attribute::create_feature_map(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
+// 	if (err != ESP_OK) {
+// 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create feature map attribute");
+// 		return err;
+// 	} else {
+// 		ESP_LOGI(TAG_ENDPOINT_INIT, "feature map attribute created");
+// 	}
+
+	// 10. Up/Open Command
+	esp_matter::command_t *wc_cluster_upopen_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_openorclose_handler);
+	if (!wc_cluster_upopen_command) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create Up/Open command");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "Up/Open command created");
+	}
+
+	// 11. Stop Command
+	esp_matter::command_t *wc_cluster_stop_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::StopMotion::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
+	if (!wc_cluster_stop_command) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create Stop command");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "Stop command created");
+	}
+
+	// 12. Down/Close Command
+	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
+	if (!wc_cluster_downclose_command) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create Down/Close command");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "Down/Close command created");
+	}
 	
-	ESP_LOGI(TAG_ENDPOINT_INIT, "window Covering cluster created");
+	ESP_LOGI(TAG_ENDPOINT_INIT, "Window Covering cluster fully constructed");
 	
 	return ESP_OK;
 }
