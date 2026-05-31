@@ -8,7 +8,7 @@ static const char *TAG = "WC_MANAGER";
 /* ------------------------------------------------------------------ */
 /*  Extern declarations for global state (defined in app_main.cpp)     */
 /* ------------------------------------------------------------------ */
-extern uint16_t switch_endpoint_id;
+extern uint16_t wc_endpoint_id;
 extern uint32_t s_closing_start_ms;
 extern bool s_is_closing_active;
 extern uint32_t s_motor_start_ms;
@@ -38,17 +38,11 @@ CHIP_ERROR MyWindowCoveringManager::HandleMovement(WindowCoveringType type) {
     
     ESP_LOGI(TAG, "🔄 Direction: %s (from pos=%d%%)", is_opening ? "OPENING" : "CLOSING", s_last_known_position);
 
-    // Determine the new operational state bit for Lift
-    OperationalState newState = is_opening ? 
-        OperationalState::MovingUpOrOpen : 
-        OperationalState::MovingDownOrClose;
+    OperationalState newState = is_opening ? OperationalState::MovingUpOrOpen : OperationalState::MovingDownOrClose;
 
-    // Use the proper Window Covering API to set operational state
-    OperationalStateSet(switch_endpoint_id, OperationalStatus::kLift, newState);
-    ESP_LOGI(TAG, "✅ Operational status updated to %d", 
-             chip::to_underlying(newState));
+    OperationalStateSet(wc_endpoint_id, OperationalStatus::kLift, newState);
+    ESP_LOGI(TAG, "✅ Operational status updated to %d", chip::to_underlying(newState));
 
-    // Toggle the hardware relay
     motor_relay_toggle_async();
 
     return CHIP_NO_ERROR;
@@ -60,7 +54,7 @@ CHIP_ERROR MyWindowCoveringManager::HandleStopMotion(void) {
     motor_relay_toggle_async();
     
     // Update operational status back to Stall via proper API
-    OperationalStateSet(switch_endpoint_id, OperationalStatus::kLift, 
+    OperationalStateSet(wc_endpoint_id, OperationalStatus::kLift, 
                         OperationalState::Stall);
     
     return CHIP_NO_ERROR;

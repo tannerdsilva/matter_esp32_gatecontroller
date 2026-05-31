@@ -15,7 +15,7 @@
 #define SUB_STALE_TIMEOUT_S   3600   // Reset counter every 1 hour
 
 extern void set_window_covering_to_unknown(uint16_t endpoint_id);
-extern uint16_t switch_endpoint_id;
+extern uint16_t wc_endpoint_id;
 
 // Global state
 static subscription_binding_t s_current_binding = {
@@ -136,7 +136,7 @@ void subscription_manager_on_subscription_failed(void) {
         s_current_binding.state == SUBSCRIPTION_STATE_CONNECTING) {
         
         ESP_LOGW(TAG, "⚠️ Subscription failed, scheduling retry (count=%d)", (int)(s_current_binding.retry_count + 1));
-        set_window_covering_to_unknown(switch_endpoint_id);
+        set_window_covering_to_unknown(wc_endpoint_id);
         s_current_binding.state = SUBSCRIPTION_STATE_FAILED;
         s_current_binding.last_failure_time = (uint32_t)(esp_timer_get_time() / 1000); // ms
         s_current_binding.last_state_change_ms = esp_timer_get_time() / 1000; // ✅ Record timestamp

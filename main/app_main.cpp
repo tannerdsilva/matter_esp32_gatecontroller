@@ -6,6 +6,7 @@
 #include <esp_matter_client.h>
 #include <app/clusters/bindings/binding-table.h>
 
+
 #include <app/clusters/boolean-state-server/boolean-state-cluster.h>
 #include <app/clusters/window-covering-server/window-covering-server.h>
 #include <app/data-model/Nullable.h>
@@ -50,7 +51,7 @@ led_indicator_subsystem_t led_indicator_subsystem;
 static const char *TAG_BIND = "BIND_MGR";
 static const char *TAG_EVENT = "APP_EVENT_CB";
 static uint16_t event_stage = 0;
-uint16_t switch_endpoint_id = 0;
+uint16_t wc_endpoint_id = 1;
 static esp_matter::endpoint_t* s_cover_endpoint = nullptr;
 
 using namespace esp_matter::client;
@@ -63,52 +64,124 @@ uint32_t s_motor_start_ms = 0;
 bool s_motor_active = false;
 uint8_t s_last_known_position = 0;
 
+// data model
+esp_matter::node_t *data_node = nullptr;
+esp_matter::endpoint_t *root_endpoint  = nullptr;
+esp_matter::cluster_t *root_binding_cluster = nullptr;
+// window covering endpoint
+esp_matter::endpoint_t *wc_endpoint = nullptr;
+esp_matter::cluster_t *wc_identify_cluster = nullptr;
+esp_matter::cluster_t *wc_groups_cluster = nullptr;
+esp_matter::cluster_t *wc_descriptor_cluster = nullptr;
+
+static esp_err_t dummy_command_callback(const chip::app::ConcreteCommandPath &command_path, 
+                                        chip::TLV::TLVReader &tlv_data, 
+                                        void *opaque_ptr) {
+                                        	
+    // 1. Access the opaque (user) data if provided
+    if (opaque_ptr != nullptr) {
+        ESP_LOGI(TAG, "Opaque pointer is valid: %p", opaque_ptr);
+        // Example: MyContext *ctx = static_cast<MyContext*>(opaque_ptr);
+        // ctx->something = 42;
+    }
+
+    // 2. Log which command triggered this
+    ESP_LOGI(TAG, "Command received: Endpoint=0x%04X, Cluster=0x%06" PRIX32 ", CommandId=0x%02X", 
+             (uint16_t)command_path.mEndpointId, 
+             (uint32_t)command_path.mClusterId, 
+             (uint8_t)command_path.mCommandId);
+
+    // 1. Declare a Tag to hold the element identifier
+    chip::TLV::Tag tag;
+    CHIP_ERROR err = CHIP_NO_ERROR;
+
+    // 2. Use 'Next(Tag)' to iterate through all elements in the payload.
+    // This is the standard way to parse TLV data in Matter.
+    while ((err = tlv_data.Next(tag)) == CHIP_NO_ERROR) {
+        // 3. Cast to uint64_t to satisfy PRIu64 format specifier
+        // (The Tag number might be 32-bit in some contexts, so explicit cast is safe).
+        ESP_LOGD(TAG, "  Tag: %" PRIu64 ", Type: %d", 
+                 (uint64_t)chip::TLV::TagNumFromTag(tag), 
+                 (int)tlv_data.GetType());
+                 
+        // 4. Skip the value to advance the reader safely to the next element.
+        // Use this if you don't need to extract the specific value into a local variable.
+        err = tlv_data.Skip();
+    }
+
+    // 5. Check if we reached the end of the container cleanly.
+    // CHIP_END_OF_TLV is the expected "success" state for finishing the loop.
+    if (err != CHIP_END_OF_TLV) {
+        ESP_LOGW(TAG, "Error parsing TLV payload: %s", ErrorStr(err));
+    }
+    
+    
+    return ESP_OK;
+}
+
 static const char *TAG_ENDPOINT_INIT = "ENDPOINT_INIT";
 static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node) {
 	esp_err_t err = ESP_OK;
-	esp_matter::endpoint_t *endpoint = nullptr;
 	
-	endpoint = esp_matter::endpoint::create(node, 0, nullptr);
-	if (endpoint == nullptr) {
-		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create endpoint");
+	wc_endpoint = esp_matter::endpoint::create(node, 0, nullptr);
+	if (!wc_endpoint) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create new endpoint in node.");
 		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "endpoint created (internal ID: %d)", esp_matter::endpoint::get_id(wc_endpoint));
 	}
-	ESP_LOGI(TAG_ENDPOINT_INIT, "endpoint created (internal ID: %d)", esp_matter::endpoint::get_id(endpoint));
 	
-	err = esp_matter::endpoint::add_device_type(endpoint, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
+	err = esp_matter::endpoint::add_device_type(wc_endpoint, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to add device type: %d", err);
 		return err;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "device type 0x%04X v%d added", ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	}
-	ESP_LOGI(TAG_ENDPOINT_INIT, "device type 0x%04X v%d added", ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_ID, ESP_MATTER_WINDOW_COVERING_DEVICE_TYPE_VERSION);
 	
 	esp_matter::cluster::descriptor::config_t descriptor_config;
-	esp_matter::cluster::descriptor::create(endpoint, &descriptor_config, esp_matter::CLUSTER_FLAG_SERVER);
-	ESP_LOGI(TAG_ENDPOINT_INIT, "descriptor cluster created");
+	wc_descriptor_cluster = esp_matter::cluster::descriptor::create(wc_endpoint, &descriptor_config, esp_matter::CLUSTER_FLAG_SERVER);
+	if (!wc_descriptor_cluster) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create descriptor cluster");
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "descriptor cluster created");
+	}
 	
 	esp_matter::cluster::identify::config_t identify_config;
 	identify_config.identify_time = 10;		// 10 seconds
 	identify_config.identify_type = chip::to_underlying(chip::app::Clusters::Identify::IdentifyTypeEnum::kActuator);
-	esp_matter::cluster::identify::create(endpoint, &identify_config, esp_matter::CLUSTER_FLAG_SERVER);
-	ESP_LOGI(TAG_ENDPOINT_INIT, "identify cluster created (10s timeout)");
+	wc_identify_cluster = esp_matter::cluster::identify::create(wc_endpoint, &identify_config, esp_matter::CLUSTER_FLAG_SERVER);
+	if (!wc_identify_cluster) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create identify cluster");
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "identify cluster created (10s timeout)");
+	}
 	
 	esp_matter::cluster::common::config_t groups_config;
-	esp_matter::cluster::groups::create(endpoint, &groups_config, esp_matter::CLUSTER_FLAG_SERVER);
-	ESP_LOGI(TAG_ENDPOINT_INIT, "groups cluster created");
+	wc_groups_cluster = esp_matter::cluster::groups::create(wc_endpoint, &groups_config, esp_matter::CLUSTER_FLAG_SERVER);
+	if (!wc_groups_cluster) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create groups cluster");
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "groups cluster created");
+	}
 	
-	esp_matter::cluster::window_covering::config_t wc_config(0);
-
-	wc_config.type = 0x00;
+	esp_matter::cluster_t *wc_cluster_scratchbuilt = esp_matter::cluster::create(wc_endpoint, chip::app::Clusters::WindowCovering::Id, esp_matter::CLUSTER_FLAG_SERVER);
 	
-	wc_config.feature_flags = (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift;
-		
-	wc_config.delegate = &s_cover_delegate;
+	esp_matter::attribute_t *wc_cluster_type_attribute = esp_matter::cluster::window_covering::attribute::create_type(wc_cluster_scratchbuilt, 0);
+	esp_matter::attribute_t *wc_cluster_configstatus_attribute = esp_matter::cluster::window_covering::attribute::create_config_status(wc_cluster_scratchbuilt, 0);
+	esp_matter::attribute_t *wc_cluster_operationalstatus_attribute = esp_matter::cluster::window_covering::attribute::create_operational_status(wc_cluster_scratchbuilt, 0);
+	esp_matter::attribute_t *wc_cluster_endproducttype_attribute = esp_matter::cluster::window_covering::attribute::create_end_product_type(wc_cluster_scratchbuilt, 0);
+	esp_matter::attribute_t *wc_cluster_mode = esp_matter::cluster::window_covering::attribute::create_mode(wc_cluster_scratchbuilt, 0);
 	
-	esp_matter::cluster::window_covering::create(endpoint, &wc_config, esp_matter::CLUSTER_FLAG_SERVER);
-	ESP_LOGI(TAG_ENDPOINT_INIT, "window Covering cluster created (feature flags = 0x%" PRIx32 ")", wc_config.feature_flags);
+	esp_matter::cluster::global::attribute::create_cluster_revision(wc_cluster_scratchbuilt, 5);
 	
-	switch_endpoint_id = esp_matter::endpoint::get_id(endpoint);
-	s_cover_endpoint = endpoint;
+	esp_matter::command_t *wc_cluster_upopen_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id, esp_matter::COMMAND_FLAG_ACCEPTED, dummy_command_callback);
+	esp_matter::command_t *wc_cluster_stop_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::StopMotion::Id, esp_matter::COMMAND_FLAG_ACCEPTED, dummy_command_callback);
+	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED, dummy_command_callback);
+	chip::app::Clusters::WindowCovering::SetDefaultDelegate(wc_endpoint_id, &s_cover_delegate);
+	
+	ESP_LOGI(TAG_ENDPOINT_INIT, "window Covering cluster created");
+	
 	return ESP_OK;
 }
 
@@ -161,38 +234,40 @@ public:
 			}
 			s_is_closing_active = false;
 		}
-        
-        // Clear closing state if door is opened
-        if (!is_closed) {
-            s_is_closing_active = false;
-            s_closing_start_ms = 0;
-        }
+		
+		// Clear closing state if door is opened
+		if (!is_closed) {
+			s_is_closing_active = false;
+			s_closing_start_ms = 0;
+		}
 
-        // ✅ Update the "Basic Lift" percentage attribute (0% to 100%)
-        esp_matter_attr_val_t new_pos = esp_matter_uint8(percentage);
-        esp_err_t err = esp_matter::attribute::set_val(
-            switch_endpoint_id,
-            chip::app::Clusters::WindowCovering::Id,
-            chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercentage::Id,
-            &new_pos
-        );
+		// ✅ Update the "Basic Lift" percentage attribute (0% to 100%)
+		percentage = is_closed ? 100 : 0;
+	
+		// 1. Update current position
+		chip::app::Clusters::WindowCovering::NPercent100ths pos;
+		pos.SetNonNull(is_closed ? WC_PERCENT100THS_MAX_CLOSED : WC_PERCENT100THS_MIN_OPEN);
+		chip::app::Clusters::WindowCovering::LiftPositionSet(wc_endpoint_id, pos);
+		
+		// 3. Update last known position
+		s_last_known_position = percentage;
 
-        // ✅ Update operational state to Stall (not moving)
-        chip::app::Clusters::WindowCovering::OperationalStateSet(switch_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
-        ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", percentage);
-    }
+		// ✅ Update operational state to Stall (not moving)
+		chip::app::Clusters::WindowCovering::OperationalStateSet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
+		ESP_LOGI(TAG_BIND, "✅ Window covering updated to %d%%", percentage);
+	}
 
-    virtual void OnError(CHIP_ERROR aError) override {
-        ESP_LOGE(TAG_BIND, "❌ Subscription error: %s", ErrorStr(aError));
-        subscription_manager_on_subscription_failed();
+	virtual void OnError(CHIP_ERROR aError) override {
+		ESP_LOGE(TAG_BIND, "❌ Subscription error: %s", ErrorStr(aError));
+		subscription_manager_on_subscription_failed();
 		led_indicator_set_color(&led_indicator_subsystem, 255, 128, 0);
-    }
+	}
 
-    virtual void OnDone(chip::app::ReadClient * apReadClient) override {
-        ESP_LOGI(TAG_BIND, "ℹ️ Subscription ended");
-        subscription_manager_on_subscription_failed();
+	virtual void OnDone(chip::app::ReadClient * apReadClient) override {
+		ESP_LOGI(TAG_BIND, "ℹ️ Subscription ended");
+		subscription_manager_on_subscription_failed();
 		led_indicator_set_color(&led_indicator_subsystem, 255, 128, 0);
-    }
+	}
 };
 
 static BooleanStateReadCallback s_callback_handler;
@@ -249,8 +324,7 @@ static void start_contact_subscription(chip::NodeId node_id, chip::EndpointId en
 static void revive_existing_bindings(void) {
     ESP_LOGI(TAG_BIND, "🔄 Reviving existing binding subscriptions from NVS...");
     
-    chip::app::Clusters::Binding::Table &table = 
-        chip::app::Clusters::Binding::Table::GetInstance();
+    chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
     size_t count = table.Size();
     ESP_LOGI(TAG_BIND, "🔄 There are %i entries stored in the nvs binding table storage.", count);
     
@@ -276,9 +350,7 @@ static void connection_success_callback(esp_matter::client::peer_device_t *peer_
 	}
 	
 	ESP_LOGI(TAG_BIND, "✅ Connection established, starting subscription");
-	
 	chip::EndpointId remote_ep = (chip::EndpointId)(uintptr_t)req_handle->request_data;
-	
 	esp_err_t err = esp_matter::client::interaction::subscribe::send_request(
 		peer_device, 
 		&req_handle->attribute_path, 
@@ -407,21 +479,21 @@ static esp_err_t app_attribute_update_cb(esp_matter::attribute::callback_type_t 
 }
 
 static esp_err_t init_binding_cluster(esp_matter::node_t *node) {
-	// Get root endpoint (always endpoint ID 0)
-	esp_matter::endpoint_t *root_endpoint = esp_matter::endpoint::get_first(node);
+	root_endpoint = esp_matter::endpoint::get_first(node);
 	if (!root_endpoint) {
-		ESP_LOGE(TAG, "❌ Failed to get root endpoint");
+		ESP_LOGE(TAG, "❌ failed to acquire root endpoint from node.");
 		return ESP_FAIL;
 	}
 	
-	// Create Binding Server cluster on root endpoint
 	esp_matter::cluster::common::config_t binding_config;
-	esp_matter::cluster::binding::create(root_endpoint, 
-										&binding_config, 
-										esp_matter::CLUSTER_FLAG_SERVER);
-	ESP_LOGI(TAG, "✅ Binding cluster added to root endpoint (ID=0)");
-	
-	return ESP_OK;
+	root_binding_cluster = esp_matter::cluster::binding::create(root_endpoint, &binding_config, esp_matter::CLUSTER_FLAG_SERVER);
+	if (!root_binding_cluster) {
+		ESP_LOGE(TAG, "❌ failed to create binding cluster on root endpoint.");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG, "✅ binding cluster added to root endpoint");
+		return ESP_OK;
+	}
 }
 
 extern "C" void app_main() {
@@ -445,26 +517,23 @@ extern "C" void app_main() {
 	Create root node with standard callbacks
 	================================================================ */
 	esp_matter::node::config_t node_config;
-	esp_matter::node_t *node = esp_matter::node::create(
-		&node_config, 
-		app_attribute_update_cb, 
-		app_identification_cb);
-	ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
-	
-	err = init_binding_cluster(node);
+	data_node = esp_matter::node::create(&node_config, app_attribute_update_cb, app_identification_cb);
+	ABORT_APP_ON_FAILURE(data_node != nullptr, ESP_LOGE(TAG, "failed to create Matter node"));
+	ESP_LOGI(TAG, "NODE CREATED :: endpoint count %i", esp_matter::endpoint::get_count(data_node));
+	err = init_binding_cluster(data_node);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to initialize binding cluster"));
 	
 	subscription_manager_start_watchdog();
 
-    /* ================================================================
-       Step 6: Revive existing bindings from NVS
-    ================================================================ */
-    revive_existing_bindings();
-    
+	/* ================================================================
+	   Step 6: Revive existing bindings from NVS
+	================================================================ */
+	revive_existing_bindings();
+	
 	/* ================================================================
 	Manually build the Window Covering endpoint from scratch
 	================================================================ */
-	err = create_manual_window_covering_endpoint(node);
+	err = create_manual_window_covering_endpoint(data_node);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to create window covering endpoint"));
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD

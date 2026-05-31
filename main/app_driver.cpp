@@ -90,13 +90,13 @@ using namespace chip::app::Clusters;
 using namespace esp_matter;
 using namespace esp_matter::cluster;
 
-extern uint16_t switch_endpoint_id;
+extern uint16_t wc_endpoint_id;
 extern esp_matter::endpoint_t* s_cover_endpoint;
 
 // Helper to update local position directly (suitable for local button press)
 static void update_local_position(uint16_t target_pos) {
     esp_matter_attr_val_t new_val = esp_matter_int16(target_pos);
-    esp_err_t err = esp_matter::attribute::set_val(switch_endpoint_id, 
+    esp_err_t err = esp_matter::attribute::set_val(wc_endpoint_id, 
         chip::app::Clusters::WindowCovering::Id, 
         chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercent100ths::Id, 
         &new_val);
@@ -113,7 +113,7 @@ static void app_driver_button_toggle_cb(void *arg, void *data) {
     
     // Get current position
     esp_matter_attr_val_t pos_val;
-    esp_err_t err = esp_matter::attribute::get_val(switch_endpoint_id, 
+    esp_err_t err = esp_matter::attribute::get_val(wc_endpoint_id, 
         chip::app::Clusters::WindowCovering::Id, 
         chip::app::Clusters::WindowCovering::Attributes::CurrentPositionLiftPercentage::Id, 
         &pos_val);
