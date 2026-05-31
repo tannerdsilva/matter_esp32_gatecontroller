@@ -5,7 +5,7 @@
 #include <esp_matter.h>
 #include <esp_matter_client.h>
 #include <app/clusters/bindings/binding-table.h>
-
+#include "debounce.h"
 
 #include <app/clusters/boolean-state-server/boolean-state-cluster.h>
 #include <app/clusters/window-covering-server/window-covering-server.h>
@@ -50,8 +50,10 @@ led_indicator_subsystem_t led_indicator_subsystem;
 #define TAG "app_main"
 static const char *TAG_BIND = "BIND_MGR";
 static const char *TAG_EVENT = "APP_EVENT_CB";
+static const char *TAG_HANDLER = "EVENT_HANDLER";
+
 static uint16_t event_stage = 0;
-uint16_t wc_endpoint_id = 1;
+uint16_t wc_endpoint_id = 99;
 static esp_matter::endpoint_t* s_cover_endpoint = nullptr;
 
 using namespace esp_matter::client;
@@ -74,49 +76,60 @@ esp_matter::cluster_t *wc_identify_cluster = nullptr;
 esp_matter::cluster_t *wc_groups_cluster = nullptr;
 esp_matter::cluster_t *wc_descriptor_cluster = nullptr;
 
-static esp_err_t dummy_command_callback(const chip::app::ConcreteCommandPath &command_path, 
-                                        chip::TLV::TLVReader &tlv_data, 
-                                        void *opaque_ptr) {
-                                        	
-    // 1. Access the opaque (user) data if provided
-    if (opaque_ptr != nullptr) {
-        ESP_LOGI(TAG, "Opaque pointer is valid: %p", opaque_ptr);
-        // Example: MyContext *ctx = static_cast<MyContext*>(opaque_ptr);
-        // ctx->something = 42;
-    }
 
-    // 2. Log which command triggered this
-    ESP_LOGI(TAG, "Command received: Endpoint=0x%04X, Cluster=0x%06" PRIX32 ", CommandId=0x%02X", 
-             (uint16_t)command_path.mEndpointId, 
-             (uint32_t)command_path.mClusterId, 
-             (uint8_t)command_path.mCommandId);
+static esp_err_t window_covering_command_openorclose_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
+	(void)tlv_data;
+	(void)opaque_ptr;
+	
+	while (tlv_data.Next() == CHIP_NO_ERROR) {
+		ESP_LOGW(TAG_HANDLER, "SKIPPING TVL_DATA");
+		tlv_data.Skip();
+	}
+	
+	if (debounce_check() == false) {
+		ESP_LOGW(TAG_HANDLER, "DEBOUNCER BLOCKING COMMAND");
+	} else {
+		ESP_LOGI(TAG_HANDLER, "DEBOUNCER NO BLOCK");
+	}
+	return ESP_OK;
+}
 
-    // 1. Declare a Tag to hold the element identifier
-    chip::TLV::Tag tag;
-    CHIP_ERROR err = CHIP_NO_ERROR;
-
-    // 2. Use 'Next(Tag)' to iterate through all elements in the payload.
-    // This is the standard way to parse TLV data in Matter.
-    while ((err = tlv_data.Next(tag)) == CHIP_NO_ERROR) {
-        // 3. Cast to uint64_t to satisfy PRIu64 format specifier
-        // (The Tag number might be 32-bit in some contexts, so explicit cast is safe).
-        ESP_LOGD(TAG, "  Tag: %" PRIu64 ", Type: %d", 
-                 (uint64_t)chip::TLV::TagNumFromTag(tag), 
-                 (int)tlv_data.GetType());
-                 
-        // 4. Skip the value to advance the reader safely to the next element.
-        // Use this if you don't need to extract the specific value into a local variable.
-        err = tlv_data.Skip();
-    }
-
-    // 5. Check if we reached the end of the container cleanly.
-    // CHIP_END_OF_TLV is the expected "success" state for finishing the loop.
-    if (err != CHIP_END_OF_TLV) {
-        ESP_LOGW(TAG, "Error parsing TLV payload: %s", ErrorStr(err));
-    }
-    
-    
-    return ESP_OK;
+static esp_err_t window_covering_command_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
+	(void)tlv_data;
+	(void)opaque_ptr;
+	
+	while (tlv_data.Next() == CHIP_NO_ERROR) {
+		ESP_LOGI(TAG, "SKIPPING TVL_DATA");
+		tlv_data.Skip();
+	}
+	
+	switch (command_path.mCommandId) {
+		case chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id:
+			ESP_LOGI(TAG, "⬆️ Up/Open Command Received");
+			s_motor_active = true;
+			s_is_closing_active = false;
+			motor_relay_toggle_async();
+			break;
+	
+		case chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id:
+			ESP_LOGI(TAG, "⬇️ Down/Close Command Received");
+			s_motor_active = true;
+			s_is_closing_active = true;
+			s_closing_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+			motor_relay_toggle_async();
+			break;
+	
+		case chip::app::Clusters::WindowCovering::Commands::StopMotion::Id:
+			ESP_LOGI(TAG, "🛑 Stop Motion Command Received");
+			s_motor_active = false;
+			motor_relay_toggle_async(); // Your toggle likely stops the relay
+			break;
+	
+		default:
+			ESP_LOGW(TAG, "❓ Unknown Window Covering Command");
+			return ESP_FAIL;
+	}
+	return ESP_OK;
 }
 
 static const char *TAG_ENDPOINT_INIT = "ENDPOINT_INIT";
@@ -128,6 +141,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create new endpoint in node.");
 		return ESP_FAIL;
 	} else {
+		wc_endpoint_id = esp_matter::endpoint::get_id(wc_endpoint);
 		ESP_LOGI(TAG_ENDPOINT_INIT, "endpoint created (internal ID: %d)", esp_matter::endpoint::get_id(wc_endpoint));
 	}
 	
@@ -173,12 +187,16 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 	esp_matter::attribute_t *wc_cluster_endproducttype_attribute = esp_matter::cluster::window_covering::attribute::create_end_product_type(wc_cluster_scratchbuilt, 0);
 	esp_matter::attribute_t *wc_cluster_mode = esp_matter::cluster::window_covering::attribute::create_mode(wc_cluster_scratchbuilt, 0);
 	
-	esp_matter::cluster::global::attribute::create_cluster_revision(wc_cluster_scratchbuilt, 5);
+	esp_matter::attribute_t *lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, nullable<uint8_t>{});
 	
-	esp_matter::command_t *wc_cluster_upopen_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id, esp_matter::COMMAND_FLAG_ACCEPTED, dummy_command_callback);
-	esp_matter::command_t *wc_cluster_stop_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::StopMotion::Id, esp_matter::COMMAND_FLAG_ACCEPTED, dummy_command_callback);
-	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED, dummy_command_callback);
-	chip::app::Clusters::WindowCovering::SetDefaultDelegate(wc_endpoint_id, &s_cover_delegate);
+	esp_matter::cluster::global::attribute::create_cluster_revision(wc_cluster_scratchbuilt, 5);
+	esp_matter::cluster::global::attribute::create_feature_map(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
+	
+	esp_matter::command_t *wc_cluster_upopen_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_openorclose_handler);
+	esp_matter::command_t *wc_cluster_stop_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::StopMotion::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
+	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
+
+// 	chip::app::Clusters::WindowCovering::SetDefaultDelegate(wc_endpoint_id, &s_cover_delegate);
 	
 	ESP_LOGI(TAG_ENDPOINT_INIT, "window Covering cluster created");
 	
@@ -375,6 +393,7 @@ static void connection_success_callback(esp_matter::client::peer_device_t *peer_
 Event callback with improved binding handling
 ================================================================ */
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
+	uint8_t status_bits;
 	switch (event->Type) {
 	case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
 		ESP_LOGI(TAG_EVENT, "🌐 IP Address Changed");
@@ -421,7 +440,11 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 			revive_existing_bindings();
 		});
 		led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0);
+		status_bits = static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalStatus::kGlobal) | static_cast<uint8_t>(chip::app::Clusters::WindowCovering::OperationalStatus::kLift);
+		// 2. Pass the combined integer into the BitMask constructor
+		chip::app::Clusters::WindowCovering::OperationalStatusSet(wc_endpoint_id, chip::BitMask<chip::app::Clusters::WindowCovering::OperationalStatus>(status_bits));
 		break;
+		
 		
 	case chip::DeviceLayer::DeviceEventType::kBindingsChangedViaCluster: {
 		ESP_LOGI(TAG_EVENT, "🔄 bindings changed via cluster");

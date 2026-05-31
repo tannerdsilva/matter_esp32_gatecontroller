@@ -2,7 +2,7 @@
 #include <esp_timer.h>
 
 // Fixed threshold: 500ms (adjust as needed)
-#define DEBOUNCE_THRESHOLD_MS 500
+#define DEBOUNCE_THRESHOLD_MS 3500
 
 static uint32_t s_last_time_ms = 0;
 static bool s_initialized = false;
@@ -19,11 +19,10 @@ void debounce_init(void) {
 bool debounce_check(void) {
     if (!s_initialized) {
         debounce_init();
+        return true;
     }
 
     uint32_t now = get_current_time_ms();
-    
-    // Handle uint32_t wraparound safely
     uint32_t elapsed = (now >= s_last_time_ms) ? (now - s_last_time_ms) : (UINT32_MAX - s_last_time_ms + now);
     
     if (elapsed >= DEBOUNCE_THRESHOLD_MS) {
