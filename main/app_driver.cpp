@@ -24,62 +24,62 @@
 
 static const char *TAG = "DRIVER";
 static const char *TAG_CLIENT = "CLIENT";
+static const char *TAG_APP_DRIVER = "APP_DRIVER";
 
-/* ------------------------------------------------------------------ */
-/*  Motor relay — single GPIO, non-blocking pulse via esp_timer       */
-/* ------------------------------------------------------------------ */
-#define MOTOR_RELAY_GPIO    GPIO_NUM_1
-#define MOTOR_RELAY_PULSE_MS 500        /* ms the relay is held active     */
+#define MOTOR_RELAY_GPIO			GPIO_NUM_1
+#define MOTOR_RELAY_PULSE_MS		500
 
 static esp_timer_handle_t s_motor_timer = NULL;
 
-/** Timer callback: turns relay OFF after pulse duration */
+// timer callback: turns relay OFF after pulse duration
 static void motor_timer_callback(void *arg) {
-    (void)arg;
-    gpio_set_level(MOTOR_RELAY_GPIO, 0);
+	(void)arg;
+	gpio_set_level(MOTOR_RELAY_GPIO, 0);
 }
 
-/** Initialize motor relay GPIO and create the timer */
-void motor_relay_init(void)
-{
-    gpio_config_t io_conf = {
-        .pin_bit_mask   = (1ULL << MOTOR_RELAY_GPIO),
-        .mode           = GPIO_MODE_OUTPUT,
-        .pull_up_en     = GPIO_PULLUP_DISABLE,
-        .pull_down_en   = GPIO_PULLDOWN_DISABLE,
-        .intr_type      = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
-    gpio_set_level(MOTOR_RELAY_GPIO, 0);
-
-    esp_timer_create_args_t timer_cfg = {
-        .callback = motor_timer_callback,
-        .name     = "motor_pulse",
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_cfg, &s_motor_timer));
-
-    ESP_LOGI("DRIVER", "Motor relay initialized on GPIO %d (%d ms pulse)",
-             MOTOR_RELAY_GPIO, MOTOR_RELAY_PULSE_MS);
+// initialize motor relay GPIO and create the timer
+void motor_relay_init(void) {
+	// gpio config
+	gpio_config_t io_conf = {
+		.pin_bit_mask		= (1ULL << MOTOR_RELAY_GPIO),
+		.mode				= GPIO_MODE_OUTPUT,
+		.pull_up_en			= GPIO_PULLUP_DISABLE,
+		.pull_down_en		= GPIO_PULLDOWN_DISABLE,
+		.intr_type			= GPIO_INTR_DISABLE,
+	};
+	ESP_ERROR_CHECK(gpio_config(&io_conf));
+	// set the initial gpio level to zero
+	gpio_set_level(MOTOR_RELAY_GPIO, 0);
+	// create the timer that will enable the nonblocking async relay toggles
+	esp_timer_create_args_t timer_cfg = {
+		.callback	= motor_timer_callback,
+		.name		= "relay_toggle_timer",
+	};
+	ESP_ERROR_CHECK(esp_timer_create(&timer_cfg, &s_motor_timer));
+	ESP_LOGI(TAG_APP_DRIVER, "relay toggle output initialized on GPIO %d (%d ms toggle configured)", MOTOR_RELAY_GPIO, MOTOR_RELAY_PULSE_MS);
 }
 
-/** Start a non-blocking motor pulse. Turns HIGH now, LOW after pulse duration. */
-void motor_relay_toggle_async(void)
-{
-    if (!s_motor_timer) return;
-
-    gpio_set_level(MOTOR_RELAY_GPIO, 1);
-    esp_timer_start_once(s_motor_timer, MOTOR_RELAY_PULSE_MS * 1000ULL);
-    ESP_LOGI("DRIVER", "Motor relay toggled (async %d ms pulse)", MOTOR_RELAY_PULSE_MS);
+// start a non-blocking motor pulse. Turns HIGH now, LOW after pulse duration.
+void motor_relay_toggle_async(void) {
+	// return if the async timer is not initialized
+	if (!s_motor_timer) {
+		return;
+	}
+	// set the output pin high
+	gpio_set_level(MOTOR_RELAY_GPIO, 1);
+	// fire the async timer to lower the output pin
+	esp_timer_start_once(s_motor_timer, MOTOR_RELAY_PULSE_MS * 1000ULL);
+	ESP_LOGI(TAG_APP_DRIVER, "motor relay toggled (async %d ms pulse)", MOTOR_RELAY_PULSE_MS);
 }
 
-/** Cancel any pending pulse and turn relay OFF immediately */
-void motor_relay_stop_immediate(void)
-{
-    if (!s_motor_timer) return;
-
-    esp_timer_stop(s_motor_timer);
-    gpio_set_level(MOTOR_RELAY_GPIO, 0);
-    ESP_LOGI("DRIVER", "Motor relay stopped (immediate)");
+// cancel any pending pulse and turn relay OFF immediately
+void motor_relay_stop_immediate(void) {
+	if (!s_motor_timer) {
+		return;
+	}
+	esp_timer_stop(s_motor_timer);
+	gpio_set_level(MOTOR_RELAY_GPIO, 0);
+	ESP_LOGI(TAG_APP_DRIVER, "motor relay stopped (immediate)");
 }
 
 
@@ -93,7 +93,6 @@ using namespace esp_matter::cluster;
 extern uint16_t wc_endpoint_id;
 extern esp_matter::endpoint_t* s_cover_endpoint;
 
-// Helper to update local position directly (suitable for local button press)
 static void update_local_position(uint16_t target_pos) {
     esp_matter_attr_val_t new_val = esp_matter_int16(target_pos);
     esp_err_t err = esp_matter::attribute::set_val(wc_endpoint_id, 
@@ -107,7 +106,6 @@ static void update_local_position(uint16_t target_pos) {
     }
 }
 
-// Toggle button handler for window covering
 static void app_driver_button_toggle_cb(void *arg, void *data) {
     ESP_LOGI(TAG, "Toggle button pressed");
     
