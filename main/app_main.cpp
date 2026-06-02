@@ -83,8 +83,6 @@ esp_matter::attribute_t *wc_cluster_operationalstatus_attribute = nullptr;
 esp_matter::attribute_t *wc_cluster_endproducttype_attribute = nullptr;
 esp_matter::attribute_t *wc_cluster_mode = nullptr;
 esp_matter::attribute_t *lift_percentage = nullptr;
-esp_matter::attribute_t *lift_percentage_n100_target = nullptr;
-esp_matter::attribute_t *lift_percentage_n100_current = nullptr;
 
 static esp_err_t window_covering_command_openorclose_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
 	(void)tlv_data;
@@ -266,6 +264,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 // 	}
 
 	// 9. Feature Map Attribute (returns esp_err_t)
+	esp_matter::cluster::global::attribute::create_feature_map(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
 // 	if (err != ESP_OK) {
 // 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create feature map attribute");
 // 		return err;
@@ -397,34 +396,34 @@ static const char *TAG_CLIENT = "CLIENT";
 static void app_client_callback(esp_matter::client::peer_device_t *peer_device, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
 	ESP_LOGI(TAG_CLIENT, "✅🔥 app_client_callback FIRED! Starting subscription...");
 	if (!peer_device || !req_handle) {
-		ESP_LOGE(TAG_CLIENT, "❌ Peer or request handle is null");
-		return;
-	}
-	
-	uint16_t min_interval = 1;
-	uint16_t max_interval = 5;
-	bool keep_subscription = true;
-	bool auto_resubscribe = false;
+        ESP_LOGE(TAG_CLIENT, "❌ Peer or request handle is null");
+        return;
+    }
+    
+    uint16_t min_interval = 1;
+    uint16_t max_interval = 5;
+    bool keep_subscription = true;
+    bool auto_resubscribe = false;
 
-	esp_err_t err = esp_matter::client::interaction::subscribe::send_request(
-		peer_device, 
-		&req_handle->attribute_path, 
-		1,
-		nullptr, 
-		0,
-		min_interval, 
-		max_interval, 
-		keep_subscription, 
-		auto_resubscribe, 
-		s_callback_handler
-	);
+    esp_err_t err = esp_matter::client::interaction::subscribe::send_request(
+        peer_device, 
+        &req_handle->attribute_path, 
+        1,
+        nullptr, 
+        0,
+        min_interval, 
+        max_interval, 
+        keep_subscription, 
+        auto_resubscribe, 
+        s_callback_handler
+    );
 
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG_CLIENT, "❌ Failed to send subscription request: %d", err);
-		subscription_manager_on_subscription_failed();
-	} else {
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_CLIENT, "❌ Failed to send subscription request: %d", err);
+        subscription_manager_on_subscription_failed();
+    } else {
 		ESP_LOGI(TAG_CLIENT, "📤 Subscribe request sent");
-	}
+    }
 }
 
 // Group callback (required by API signature even if unused)
@@ -442,25 +441,25 @@ static void start_contact_subscription(chip::NodeId node_id, chip::EndpointId en
  * Helper to revive subscriptions for existing bindings on startup
  * ------------------------------------------------------------------ */
 static void revive_existing_bindings(void) {
-	ESP_LOGI(TAG_BIND, "🔄 Reviving existing binding subscriptions from NVS...");
-	
-	chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
-	size_t count = table.Size();
-	ESP_LOGI(TAG_BIND, "🔄 There are %i entries stored in the nvs binding table storage.", count);
-	
-	for (size_t i = 0; i < count; i++) {
-		chip::app::Clusters::Binding::TableEntry entry = table.GetAt(i);
-		
-		if (entry.type != chip::app::Clusters::Binding::MATTER_UNICAST_BINDING) continue;
-		
-		uint32_t target_cluster = entry.clusterId.has_value() ? entry.clusterId.value() : 0;
-		
-		bool is_contact_binding = (target_cluster == chip::app::Clusters::BooleanState::Id || target_cluster == chip::app::Clusters::OnOff::Id || !entry.clusterId.has_value());
-		if (is_contact_binding) {
-			ESP_LOGI(TAG_BIND, "   Reviving binding: Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32, (unsigned long long)entry.nodeId, entry.remote, target_cluster);
-			start_contact_subscription(entry.nodeId, entry.remote, target_cluster);
-		}
-	}
+    ESP_LOGI(TAG_BIND, "🔄 Reviving existing binding subscriptions from NVS...");
+    
+    chip::app::Clusters::Binding::Table &table = chip::app::Clusters::Binding::Table::GetInstance();
+    size_t count = table.Size();
+    ESP_LOGI(TAG_BIND, "🔄 There are %i entries stored in the nvs binding table storage.", count);
+    
+    for (size_t i = 0; i < count; i++) {
+        chip::app::Clusters::Binding::TableEntry entry = table.GetAt(i);
+        
+        if (entry.type != chip::app::Clusters::Binding::MATTER_UNICAST_BINDING) continue;
+        
+        uint32_t target_cluster = entry.clusterId.has_value() ? entry.clusterId.value() : 0;
+        
+        bool is_contact_binding = (target_cluster == chip::app::Clusters::BooleanState::Id || target_cluster == chip::app::Clusters::OnOff::Id || !entry.clusterId.has_value());
+        if (is_contact_binding) {
+            ESP_LOGI(TAG_BIND, "   Reviving binding: Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32, (unsigned long long)entry.nodeId, entry.remote, target_cluster);
+            start_contact_subscription(entry.nodeId, entry.remote, target_cluster);
+        }
+    }
 }
 
 static void connection_success_callback(esp_matter::client::peer_device_t *peer_device, esp_matter::client::request_handle_t *req_handle, void *priv_data) {
