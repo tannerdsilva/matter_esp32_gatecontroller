@@ -83,6 +83,8 @@ esp_matter::attribute_t *wc_cluster_operationalstatus_attribute = nullptr;
 esp_matter::attribute_t *wc_cluster_endproducttype_attribute = nullptr;
 esp_matter::attribute_t *wc_cluster_mode = nullptr;
 esp_matter::attribute_t *lift_percentage = nullptr;
+esp_matter::attribute_t *lift_percentage_n100_target = nullptr;
+esp_matter::attribute_t *lift_percentage_n100_current = nullptr;
 
 static esp_err_t window_covering_command_openorclose_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
 	(void)tlv_data;
@@ -246,31 +248,35 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 	}
 
 	// 7. Lift Percentage Attribute
-	lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, nullable<uint8_t>{});
+	lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, nullable<uint8_t> {});
 	if (!lift_percentage) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage attribute");
 		return ESP_FAIL;
 	} else {
 		ESP_LOGI(TAG_ENDPOINT_INIT, "lift percentage attribute created");
 	}
-
+	
+	lift_percentage_n100_target = esp_matter::cluster::window_covering::attribute::create_target_position_lift_percent_100ths(wc_cluster_scratchbuilt, nullable<uint16_t> {});
+	if (!lift_percentage_n100_target) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage n100 (target) attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "lift percentage n100 (target) attribute created");
+	}
+	
+	lift_percentage_n100_current = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percent_100ths(wc_cluster_scratchbuilt, nullable<uint16_t> {});
+	if (!lift_percentage_n100_current) {
+		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage n100 (current) attribute");
+		return ESP_FAIL;
+	} else {
+		ESP_LOGI(TAG_ENDPOINT_INIT, "lift percentage n100 (current) attribute created");
+	}
+	
 	// 8. Cluster Revision Attribute (returns esp_err_t)
 	esp_matter::cluster::global::attribute::create_cluster_revision(wc_cluster_scratchbuilt, 5);
-// 	if (err != ESP_OK) {
-// 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create cluster revision attribute");
-// 		return err;
-// 	} else {
-// 		ESP_LOGI(TAG_ENDPOINT_INIT, "cluster revision attribute created");
-// 	}
 
 	// 9. Feature Map Attribute (returns esp_err_t)
 	esp_matter::cluster::global::attribute::create_feature_map(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Feature::kLift);
-// 	if (err != ESP_OK) {
-// 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create feature map attribute");
-// 		return err;
-// 	} else {
-// 		ESP_LOGI(TAG_ENDPOINT_INIT, "feature map attribute created");
-// 	}
 
 	// 10. Up/Open Command
 	esp_matter::command_t *wc_cluster_upopen_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::UpOrOpen::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_openorclose_handler);
