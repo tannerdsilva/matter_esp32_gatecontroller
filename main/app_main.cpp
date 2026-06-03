@@ -97,6 +97,10 @@ bool bound_sensor_last_known_position_isknown = false;
 bool bound_sensor_last_known_position_isclosed = false;
 uint32_t closing_start_ms = 0;
 
+bool animation_timer_engaged = false;
+
+extern bool animation_timer_engaged;
+
 static esp_err_t window_covering_command_openorclose_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
 	(void)tlv_data;
 	(void)opaque_ptr;
@@ -305,7 +309,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 		ESP_LOGI(TAG_ENDPOINT_INIT, "lift percentage n100 (target) attribute created");
 	}
 	// lift percentage n100 current
-	lift_percentage_n100_current = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percent_100ths(wc_cluster_scratchbuilt, nullable<uint16_t> {});
+	lift_percentage_n100_current = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percent_100ths(wc_cluster_scratchbuilt, 0);
 	if (!lift_percentage_n100_current) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage n100 (current) attribute");
 		return ESP_FAIL;
@@ -427,6 +431,13 @@ public:
 					ESP_LOGW(TAG_BIND, "⚠️ close duration outside bounds (5-60s), ignored");
 				}
 			}
+			if (animation_timer_engaged == true) {
+				chip::app::Clusters::WindowCovering::OperationalStateSet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
+			}
+			chip::app::Clusters::WindowCovering::NPercent100ths pos;
+			pos.SetNonNull(WC_PERCENT100THS_MAX_CLOSED);
+			chip::app::Clusters::WindowCovering::LiftPositionSet(wc_endpoint_id, pos);
+			_datamodel_animation_timer_cancel();
 		} else {
 			// opening specific logic here
 		}
@@ -436,23 +447,6 @@ public:
 		// BooleanState StateValue=true means the contact is Closed (magnet engaged)
 		uint8_t percentage = is_closed ? 100 : 0; 
 		ESP_LOGI(TAG_BIND, "📡 contact sensor changed position: %s (pos=%d%%)", is_closed ? "CLOSED" : "OPEN", percentage);
-		
-		// Record closure duration if we were closing and now sealed shut
-		if (is_closed && s_is_closing_active && s_closing_start_ms != 0) {
-			uint32_t close_end_ms = (uint32_t)(esp_timer_get_time() / 1000);
-			if (close_duration_add(s_closing_start_ms, close_end_ms)) {
-				ESP_LOGI(TAG_BIND, "✅ close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
-			} else {
-				ESP_LOGW(TAG_BIND, "⚠️ close duration outside bounds (5-60s), ignored");
-			}
-			s_is_closing_active = false;
-		}
-		
-		// Clear closing state if door is opened
-		if (!is_closed) {
-			s_is_closing_active = false;
-			s_closing_start_ms = 0;
-		}
 
 		// ✅ Update the "Basic Lift" percentage attribute (0% to 100%)
 		percentage = is_closed ? 100 : 0;

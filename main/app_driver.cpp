@@ -28,6 +28,7 @@ static const char *TAG = "DRIVER";
 static const char *TAG_CLIENT = "CLIENT";
 static const char *TAG_APP_DRIVER = "APP_DRIVER";
 
+
 #define MOTOR_RELAY_GPIO			GPIO_NUM_1
 #define MOTOR_RELAY_PULSE_MS		500
 
@@ -40,11 +41,12 @@ extern bool bound_sensor_last_known_position_isclosed;
 extern uint32_t closing_start_ms;
 extern uint16_t wc_endpoint_id;
 
-static bool animation_timer_engaged = false;
+extern bool animation_timer_engaged;
 static esp_timer_handle_t s_animation_timer = NULL;
 
 static void datamodel_animation_timer_callback(void *arg) {
 	(void)arg;
+	ESP_LOGW(TAG_APP_DRIVER, "DATAMODEL TIMER FIRED!");
 	if (xSemaphoreTake(data_model_mux, pdMS_TO_TICKS(100)) != pdTRUE) {
 		ESP_LOGE(TAG_APP_DRIVER, "FAILED TO ACQUIRE DATA MODEL LOCK");
 		return;
@@ -67,6 +69,12 @@ static void datamodel_animation_timer_callback(void *arg) {
 	
 	chip::app::Clusters::WindowCovering::OperationalStateSet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
 	xSemaphoreGive(data_model_mux);
+}
+
+esp_err_t _datamodel_animation_timer_cancel(void) {
+	esp_timer_stop(s_animation_timer);
+	animation_timer_engaged = false;
+	return ESP_OK;
 }
 
 void datamodel_animation_timer_init(void) {
