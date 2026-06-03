@@ -1,6 +1,8 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include "freertos/FreeRTOS.h"
+#include "esp_timer.h"
 
 #include <esp_matter.h>
 #include <esp_matter_client.h>
@@ -66,6 +68,9 @@ uint32_t s_motor_start_ms = 0;
 bool s_motor_active = false;
 uint8_t s_last_known_position = 0;
 
+// mutex lock for all resources going forward
+static SemaphoreHandle_t data_model_mux = NULL;
+
 // data model
 esp_matter::node_t *data_node = nullptr;
 esp_matter::endpoint_t *root_endpoint  = nullptr;
@@ -75,7 +80,7 @@ esp_matter::endpoint_t *wc_endpoint = nullptr;
 esp_matter::cluster_t *wc_identify_cluster = nullptr;
 esp_matter::cluster_t *wc_groups_cluster = nullptr;
 esp_matter::cluster_t *wc_descriptor_cluster = nullptr;
-
+// window covering attributes
 esp_matter::cluster_t *wc_cluster_scratchbuilt = nullptr;
 esp_matter::attribute_t *wc_cluster_type_attribute = nullptr;
 esp_matter::attribute_t *wc_cluster_configstatus_attribute = nullptr;
@@ -86,6 +91,12 @@ esp_matter::attribute_t *lift_percentage = nullptr;
 esp_matter::attribute_t *lift_percentage_n100_target = nullptr;
 esp_matter::attribute_t *lift_percentage_n100_current = nullptr;
 
+// state tracking
+
+bool bound_sensor_last_known_position_isknown = false;
+bool bound_sensor_last_known_position_isclosed = false;
+uint32_t closing_start_ms = 0;
+
 static esp_err_t window_covering_command_openorclose_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
 	(void)tlv_data;
 	(void)opaque_ptr;
@@ -95,14 +106,43 @@ static esp_err_t window_covering_command_openorclose_handler(const chip::app::Co
 		tlv_data.Skip();
 	}
 	
+	// obtain the data model lock
+	if (xSemaphoreTake(data_model_mux, pdMS_TO_TICKS(100)) != pdTRUE) {
+		ESP_LOGE(TAG_BIND, "FAILED TO ACQUIRE DATA MODEL LOCK");
+		return ESP_FAIL;
+	}
+	
+	esp_err_t err_ret = ESP_OK;
+	
 	if (debounce_check() == false) {
 		ESP_LOGW(TAG_HANDLER, "DEBOUNCER BLOCKING COMMAND. THE DEBOUNCER WILL BE RESET.");
 		debounce_reset();
-		return ESP_FAIL;
+		err_ret = ESP_FAIL;
 	} else {
 		ESP_LOGI(TAG_HANDLER, "DEBOUNCER NO BLOCK");
 	}
-	return ESP_OK;
+
+	motor_relay_toggle_async();
+
+	if (bound_sensor_last_known_position_isknown == true) {
+		// state must be known before we "animate" the movement in the data model.
+		if (bound_sensor_last_known_position_isclosed == true) {
+			// set to 'opening' state
+			chip::app::Clusters::WindowCovering::OperationalStateSet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::MovingUpOrOpen);
+		} else {
+			// set to 'closing' state
+			chip::app::Clusters::WindowCovering::OperationalStateSet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::MovingDownOrClose);
+			closing_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+		}
+		ESP_LOGI(TAG_HANDLER, "window covering operational state modified");
+	} else {
+		// take no action when the position is unknown
+	}
+	
+	// release the data model lock
+	xSemaphoreGive(data_model_mux);
+
+	return err_ret;
 }
 
 static esp_err_t window_covering_command_handler(const chip::app::ConcreteCommandPath &command_path, chip::TLV::TLVReader &tlv_data, void *opaque_ptr) {
@@ -249,7 +289,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 	}
 
 	// lift percentage attribute
-	lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, nullable<uint8_t> {});
+	lift_percentage = esp_matter::cluster::window_covering::attribute::create_current_position_lift_percentage(wc_cluster_scratchbuilt, 0);
 	if (!lift_percentage) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage attribute");
 		return ESP_FAIL;
@@ -257,7 +297,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 		ESP_LOGI(TAG_ENDPOINT_INIT, "lift percentage attribute created");
 	}
 	// lift percentage n100 target
-	lift_percentage_n100_target = esp_matter::cluster::window_covering::attribute::create_target_position_lift_percent_100ths(wc_cluster_scratchbuilt, nullable<uint16_t> {});
+	lift_percentage_n100_target = esp_matter::cluster::window_covering::attribute::create_target_position_lift_percent_100ths(wc_cluster_scratchbuilt, 0);
 	if (!lift_percentage_n100_target) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create lift percentage n100 (target) attribute");
 		return ESP_FAIL;
@@ -298,7 +338,7 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 	}
 
 	// down/close command
-	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_handler);
+	esp_matter::command_t *wc_cluster_downclose_command = esp_matter::command::create(wc_cluster_scratchbuilt, (uint32_t)chip::app::Clusters::WindowCovering::Commands::DownOrClose::Id, esp_matter::COMMAND_FLAG_ACCEPTED | esp_matter::COMMAND_FLAG_CUSTOM, window_covering_command_openorclose_handler);
 	if (!wc_cluster_downclose_command) {
 		ESP_LOGE(TAG_ENDPOINT_INIT, "failed to create Down/Close command");
 		return ESP_FAIL;
@@ -312,11 +352,28 @@ static esp_err_t create_manual_window_covering_endpoint(esp_matter::node_t *node
 
 
 void set_window_covering_to_unknown(uint16_t endpoint_id) {
-	chip::app::DataModel::Nullable<chip::Percent100ths> unknown_position;
+	nullable<uint8_t> nu8 = {};
+	nullable<uint16_t> nu16 = {};
+	esp_matter_attr_val_t attrval8 = esp_matter_nullable_uint8(nu8);
+	esp_matter_attr_val_t attrval16 = esp_matter_nullable_uint16(nu16);
 	
-	chip::app::Clusters::WindowCovering::LiftPositionSet(endpoint_id, unknown_position);
-	
-	ESP_LOGI(TAG, "⚠️ Window covering position set to UNKNOWN (null)");
+	uint16_t use_wc_endpoint = esp_matter::endpoint::get_id(wc_endpoint);
+	uint32_t use_wc_clusterid = esp_matter::cluster::get_id(wc_cluster_scratchbuilt);
+	uint32_t use_wc_attributeid = esp_matter::attribute::get_id(lift_percentage);
+	esp_err_t err = esp_matter::attribute::report(use_wc_endpoint, use_wc_clusterid, use_wc_attributeid, &attrval8);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "there was an error setting unknown lift percentage (uint8_t) to null.");
+	}
+	use_wc_attributeid = esp_matter::attribute::get_id(lift_percentage_n100_target);
+	err = esp_matter::attribute::report(use_wc_endpoint, use_wc_clusterid, use_wc_attributeid, &attrval16);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "there was an error setting unknown lift percentage n100 target (uint16_t) to null.");
+	}
+	use_wc_attributeid = esp_matter::attribute::get_id(lift_percentage_n100_current);
+	err = esp_matter::attribute::report(use_wc_endpoint, use_wc_clusterid, use_wc_attributeid, &attrval16);
+	if (err != ESP_OK) {
+		ESP_LOGE(TAG, "there was an error setting unknown lift percentage n100 current (uint16_t) to null.");
+	}
 }
 
 static esp_timer_handle_t s_retry_timer = NULL;
@@ -331,7 +388,7 @@ public:
 
 	virtual void OnAttributeData(const chip::app::ConcreteDataAttributePath &aPath, chip::TLV::TLVReader *aReader, const chip::app::StatusIB &aStatus) override {
 		if (aStatus.mStatus != chip::Protocols::InteractionModel::Status::Success) {
-			ESP_LOGE(TAG_BIND, "⚠️ Subscription update failed, status: 0x%" PRIx32, static_cast<uint32_t>(aStatus.mStatus));
+			ESP_LOGE(TAG_BIND, "⚠️ subscription update failed, status: 0x%" PRIx32, static_cast<uint32_t>(aStatus.mStatus));
 			subscription_manager_on_subscription_failed();
 			led_indicator_set_color(&led_indicator_subsystem, 255, 128, 0);
 			return;
@@ -341,21 +398,52 @@ public:
 		
 		CHIP_ERROR err_read = aReader->Get(is_closed);
 		if (err_read != CHIP_NO_ERROR) {
-			ESP_LOGE(TAG_BIND, "⚠️ Failed to read attribute value: %s (TLV type: %d)", ErrorStr(err_read), aReader->GetType());
+			ESP_LOGE(TAG_BIND, "⚠️ failed to read attribute value: %s (TLV type: %d)", ErrorStr(err_read), aReader->GetType());
 			return;
 		}
+		
+		if (xSemaphoreTake(data_model_mux, pdMS_TO_TICKS(100)) != pdTRUE) {
+			ESP_LOGE(TAG_BIND, "FAILED TO ACQUIRE DATA MODEL LOCK");
+			return;
+		}
+		
+		// update state variables
+		if (bound_sensor_last_known_position_isknown == false && is_closed == true) {
+			bound_sensor_last_known_position_isknown = true;
+			bound_sensor_last_known_position_isclosed = is_closed;
+			ESP_LOGI(TAG_BIND, "CLOSURE POSITION IS NOW KNOWN");
+		} else if (bound_sensor_last_known_position_isknown == true && bound_sensor_last_known_position_isclosed != is_closed) {
+			bound_sensor_last_known_position_isclosed = is_closed;
+			ESP_LOGI(TAG_BIND, "internal state variables updated with new position.");
+		}
+		
+		if (is_closed == true) {
+			// closing specific logic here
+			if (closing_start_ms != 0) {
+				uint32_t close_end_ms = (uint32_t)(esp_timer_get_time() / 1000);
+				if (close_duration_add(closing_start_ms, close_end_ms)) {
+					ESP_LOGI(TAG_BIND, "✅ close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
+				} else {
+					ESP_LOGW(TAG_BIND, "⚠️ close duration outside bounds (5-60s), ignored");
+				}
+			}
+		} else {
+			// opening specific logic here
+		}
+		
+		xSemaphoreGive(data_model_mux);
 
 		// BooleanState StateValue=true means the contact is Closed (magnet engaged)
 		uint8_t percentage = is_closed ? 100 : 0; 
-		ESP_LOGI(TAG_BIND, "📡 Contact sensor changed: %s (pos=%d%%)", is_closed ? "CLOSED" : "OPEN", percentage);
+		ESP_LOGI(TAG_BIND, "📡 contact sensor changed position: %s (pos=%d%%)", is_closed ? "CLOSED" : "OPEN", percentage);
 		
 		// Record closure duration if we were closing and now sealed shut
 		if (is_closed && s_is_closing_active && s_closing_start_ms != 0) {
 			uint32_t close_end_ms = (uint32_t)(esp_timer_get_time() / 1000);
 			if (close_duration_add(s_closing_start_ms, close_end_ms)) {
-				ESP_LOGI(TAG_BIND, "✅ Close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
+				ESP_LOGI(TAG_BIND, "✅ close duration recorded: %lu ms", close_end_ms - s_closing_start_ms);
 			} else {
-				ESP_LOGW(TAG_BIND, "⚠️ Close duration outside bounds (5-60s), ignored");
+				ESP_LOGW(TAG_BIND, "⚠️ close duration outside bounds (5-60s), ignored");
 			}
 			s_is_closing_active = false;
 		}
@@ -485,7 +573,7 @@ static void connection_success_callback(esp_matter::client::peer_device_t *peer_
 		1000,    // min interval: 1 second
 		5000,    // max interval: 5 seconds
 		true,    // keep_subscription
-		true,    // auto_resubscribe
+		false,    // auto_resubscribe
 		s_callback_handler
 	);
 	
@@ -547,6 +635,8 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 			revive_existing_bindings();
 		});
 		led_indicator_set_color(&led_indicator_subsystem, 255, 0, 0);
+		subscription_manager_start_watchdog();
+		revive_existing_bindings();
 		break;
 		
 		
@@ -575,9 +665,7 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg) {
 				
 				if (is_contact_binding) {
 					ESP_LOGI(TAG_EVENT, "✅ found contact binding. Node=0x%llX, Ep=%d, Cluster=0x%" PRIx32, (unsigned long long)entry.nodeId, entry.remote, target_cluster);
-					start_contact_subscription(entry.nodeId, entry.remote,
-						target_cluster
-					);
+					start_contact_subscription(entry.nodeId, entry.remote, target_cluster);
 				}
 			}
 			break;
@@ -624,6 +712,12 @@ static esp_err_t init_binding_cluster(esp_matter::node_t *node) {
 }
 
 extern "C" void app_main() {
+	data_model_mux = xSemaphoreCreateMutex();
+	if (!data_model_mux) {
+		ESP_LOGE(TAG, "❌ Failed to create data model mutex");
+		abort();
+	}
+	
 	// nvs initialization.
 	esp_err_t err = ESP_OK;
 	err = nvs_flash_init();
@@ -649,14 +743,7 @@ extern "C" void app_main() {
 	ESP_LOGI(TAG, "NODE CREATED :: endpoint count %i", esp_matter::endpoint::get_count(data_node));
 	err = init_binding_cluster(data_node);
 	ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "failed to initialize binding cluster"));
-	
-	subscription_manager_start_watchdog();
-
-	/* ================================================================
-	   Step 6: Revive existing bindings from NVS
-	================================================================ */
-	revive_existing_bindings();
-	
+		
 	/* ================================================================
 	Manually build the Window Covering endpoint from scratch
 	================================================================ */

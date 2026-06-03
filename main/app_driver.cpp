@@ -15,6 +15,8 @@
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
+#include <app/clusters/window-covering-server/window-covering-server.h>
+
 #include "bsp/esp-bsp.h"
 
 #include "driver/gpio.h"
@@ -28,6 +30,53 @@ static const char *TAG_APP_DRIVER = "APP_DRIVER";
 
 #define MOTOR_RELAY_GPIO			GPIO_NUM_1
 #define MOTOR_RELAY_PULSE_MS		500
+
+static SemaphoreHandle_t data_model_mux;
+
+// state tracking
+
+extern bool bound_sensor_last_known_position_isknown;
+extern bool bound_sensor_last_known_position_isclosed;
+extern uint32_t closing_start_ms;
+extern uint16_t wc_endpoint_id;
+
+static bool animation_timer_engaged = false;
+static esp_timer_handle_t s_animation_timer = NULL;
+
+static void datamodel_animation_timer_callback(void *arg) {
+	(void)arg;
+	if (xSemaphoreTake(data_model_mux, pdMS_TO_TICKS(100)) != pdTRUE) {
+		ESP_LOGE(TAG_APP_DRIVER, "FAILED TO ACQUIRE DATA MODEL LOCK");
+		return;
+	}
+	
+	if (animation_timer_engaged == true) {
+		animation_timer_engaged = false;
+	}
+	
+	// load the current operational state from the data model.
+	chip::app::Clusters::WindowCovering::OperationalState current_state = chip::app::Clusters::WindowCovering::OperationalStateGet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift);
+	
+	if (current_state == chip::app::Clusters::WindowCovering::OperationalState::Stall) {
+		// do nothing, the contact sensor has already concluded the animation.
+	} else if (current_state == chip::app::Clusters::WindowCovering::OperationalState::MovingDownOrClose) {
+		// there is a problem. the closure was closing but was not found to be closed by the end of the animation time.
+	} else if (current_state == chip::app::Clusters::WindowCovering::OperationalState::MovingUpOrOpen) {
+		// the gate is showing as "opening"
+	}
+	
+	chip::app::Clusters::WindowCovering::OperationalStateSet(wc_endpoint_id, chip::app::Clusters::WindowCovering::OperationalStatus::kLift, chip::app::Clusters::WindowCovering::OperationalState::Stall);
+	xSemaphoreGive(data_model_mux);
+}
+
+void datamodel_animation_timer_init(void) {
+	esp_timer_create_args_t timer_cfg = {
+		.callback = datamodel_animation_timer_callback,
+		.name = "datamodel_animation_timer"
+	};
+	ESP_ERROR_CHECK(esp_timer_create(&timer_cfg, &s_animation_timer));
+	ESP_LOGI(TAG_APP_DRIVER, "data model animation timer initialized successfully");
+}
 
 static esp_timer_handle_t s_motor_timer = NULL;
 

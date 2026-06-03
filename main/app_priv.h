@@ -18,6 +18,8 @@ typedef void *app_driver_handle_t;
  */
 app_driver_handle_t app_driver_switch_init();
 
+void datamodel_animation_timer_init(void);
+
 void motor_relay_init(void);
 void motor_relay_toggle_async(void);
 
